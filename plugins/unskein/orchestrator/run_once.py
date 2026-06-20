@@ -24,7 +24,7 @@ for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(encoding="utf-8")
 
-API_BASE = os.getenv("UNSKEIN_API", "http://localhost:8200")
+API_BASE = os.getenv("UNSKEIN_API", "https://unskein.mupai.studio")
 MORI_TOKEN = os.getenv("UNSKEIN_MORI_TOKEN", "unskein-dev-mori-token")
 # claude -p 가 오래 걸릴 수 있어 넉넉히.
 CLAUDE_TIMEOUT = int(os.getenv("UNSKEIN_CLAUDE_TIMEOUT", "600"))
