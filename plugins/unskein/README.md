@@ -18,7 +18,7 @@
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
 | `UNSKEIN_API` | `http://localhost:8200` | SaaS 작업 큐 주소 |
-| `UNSKEIN_MORI_TOKEN` | `unskein-dev-mori-token` | 모리 연결 토큰 (SaaS 화면에서 발급) |
+| `UNSKEIN_MORI_TOKEN` | (필수) UnSkein 설정 화면에서 발급 | 모리 연결 토큰 |
 | `UNSKEIN_CLAUDE_TIMEOUT` | `600` | `claude -p` 실행 타임아웃(초) |
 | `UNSKEIN_LOOP_INTERVAL` | `30` | (loop) 빈 폴링 시 대기 초 |
 | `UNSKEIN_LOOP_MAX_EMPTY` | `0` | (loop) 연속 빈 폴링 N회 후 종료, 0=무한 |

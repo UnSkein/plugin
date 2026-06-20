@@ -25,7 +25,13 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8")
 
 API_BASE = os.getenv("UNSKEIN_API", "https://unskein.mupai.studio")
-MORI_TOKEN = os.getenv("UNSKEIN_MORI_TOKEN", "unskein-dev-mori-token")
+MORI_TOKEN = os.getenv("UNSKEIN_MORI_TOKEN")
+if not MORI_TOKEN:
+    print(
+        "UNSKEIN_MORI_TOKEN 환경변수가 필요합니다. "
+        "UnSkein 설정 화면에서 발급한 토큰을 넣으세요."
+    )
+    sys.exit(1)
 # claude -p 가 오래 걸릴 수 있어 넉넉히.
 CLAUDE_TIMEOUT = int(os.getenv("UNSKEIN_CLAUDE_TIMEOUT", "600"))
 
