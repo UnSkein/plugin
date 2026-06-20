@@ -17,9 +17,12 @@
 
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
-| `UNSKEIN_API` | `http://localhost:8200` | SaaS 작업 큐 주소 |
+| `UNSKEIN_API` | `https://unskein.mupai.studio` | SaaS 작업 큐 주소 |
 | `UNSKEIN_MORI_TOKEN` | (필수) UnSkein 설정 화면에서 발급 | 모리 연결 토큰 |
 | `UNSKEIN_CLAUDE_TIMEOUT` | `600` | `claude -p` 실행 타임아웃(초) |
+| `UNSKEIN_GIT_TOKEN` | (HTTPS repo 시 필수) | git 클론·push 토큰. 호스트별 `UNSKEIN_GIT_TOKEN_<HOST>` 도 지원. 없으면 `creds/.env` 파싱 |
+| `UNSKEIN_CRED_DIR` | `~/.unskein/creds` | 자격증명 폴더 (SSH 키 `id_ed25519`/`id_rsa`, `known_hosts`, `.env`, askpass 스크립트) |
+| `UNSKEIN_WORK_ROOT` | `~/.unskein/work` | 다오가 repo 를 클론·작업하는 폴더 |
 | `UNSKEIN_LOOP_INTERVAL` | `30` | (loop) 빈 폴링 시 대기 초 |
 | `UNSKEIN_LOOP_MAX_EMPTY` | `0` | (loop) 연속 빈 폴링 N회 후 종료, 0=무한 |
 
@@ -47,7 +50,7 @@
 ## 동작 흐름 (한 바퀴)
 
 1. `POST /api/mori/claim` (`X-Mori-Token`) 으로 backlog/answered 작업 1건 선점.
-2. 작업 → 프롬프트 변환.
-3. 작업 repo 경로에서 `claude -p "<prompt>" --output-format json --dangerously-skip-permissions` 실행.
+2. 작업 → 프롬프트 변환 + `repo_url` 전송 방식(SSH/HTTPS)에 맞춰 git 자격증명 환경 구성.
+3. `UNSKEIN_WORK_ROOT` 에서 `claude -p "<prompt>" --output-format json --dangerously-skip-permissions` 실행. 다오가 prompt 지시대로 repo 를 클론(없으면)·작업·push.
 4. stdout(JSON) 파싱 → `RESULT:` / `QUESTION:` 마커 추출.
 5. `RESULT` → report, `QUESTION` → question 으로 UnSkein 에 회수.
