@@ -17,7 +17,7 @@ UnSkein 모리·다오 자동 개발 시스템을 Claude Code 플러그인으로
 
 | 플러그인 | 설명 |
 |----------|------|
-| `unskein` | 모리·다오 실행 엔진 — 오케스트레이터 2 스크립트 + command 2개 + skill 1개 |
+| `unskein` | 모리·다오 실행 엔진 — 오케스트레이터 3 스크립트 + command 3개 + skill 2개 |
 
 ## 로컬 설치 절차
 
@@ -33,8 +33,9 @@ claude plugin install unskein@unskein-marketplace
 
 설치 후 Claude Code 안에서 명령을 쓸 수 있다:
 
-- `/unskein:mori-once` — 작업 큐에서 한 건 선점해 한 바퀴 처리
-- `/unskein:mori-loop` — 작업 큐를 폴링하며 연속 처리
+- `/unskein:run` — 작업 큐에서 한 건 선점해 한 바퀴 처리
+- `/unskein:watch` — 작업 큐를 폴링하며 연속 처리
+- `/unskein:status` — 연결·등록 상태 점검
 
 ## 설치 전 검증
 

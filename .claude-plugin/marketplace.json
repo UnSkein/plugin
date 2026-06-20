@@ -7,8 +7,8 @@
     {
       "name": "unskein",
       "source": "./plugins/unskein",
-      "description": "모리·다오 실행 엔진 (오케스트레이터 + 모리 명령 + 다오 출력 약속)",
-      "version": "1.0.2"
+      "description": "모리·다오 실행 엔진 (오케스트레이터 + 실행 명령 + 자식 출력 규약)",
+      "version": "1.1.0"
     }
   ]
 }

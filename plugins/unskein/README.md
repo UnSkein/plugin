@@ -8,9 +8,13 @@
 |------|------|------|
 | 오케스트레이터 | `orchestrator/run_once.py` | 작업 1건 선점 → 다오 한 바퀴 → 결과 회수 (폴링 없음) |
 | 오케스트레이터 | `orchestrator/run_loop.py` | 작업 큐를 주기 폴링하며 연속 구동 |
-| command | `/unskein:mori-once` | run_once 실행 |
-| command | `/unskein:mori-loop` | run_loop 실행 |
-| skill | `dao-output-contract` | 다오가 결과·질문을 모리가 파싱할 약속 형식으로 출력하는 규칙 |
+| 오케스트레이터 | `orchestrator/status.py` | 연결·등록 상태 읽기 전용 점검 |
+| command | `/unskein:run` | run_once 실행 (한 바퀴) |
+| command | `/unskein:watch` | run_loop 실행 (감시 루프) |
+| command | `/unskein:status` | 연결·등록 상태 점검 |
+| skill | `unskein-connect` | 클라이언트를 서버에 연결 (claude/git 확인 + 연결 정보 + 도달 검증) |
+| skill | `unskein-add-site` | 클라이언트에 개발 대상 프로젝트 등록 (성격 파악 + git 자격증명 + 접근 검증) |
+| 자식 규약 문서 | `orchestrator/CONTRACT.md` | 자식이 결과·질문을 오케스트레이터가 파싱할 약속 형식으로 출력하는 규약 |
 | bin | `unskein-once`, `unskein-loop` | 셸에서 직접 실행하는 래퍼 |
 
 ## 환경변수
@@ -23,17 +27,20 @@
 | `UNSKEIN_GIT_TOKEN` | (HTTPS repo 시 필수) | git 클론·push 토큰. 호스트별 `UNSKEIN_GIT_TOKEN_<HOST>` 도 지원. 없으면 `creds/.env` 파싱 |
 | `UNSKEIN_CRED_DIR` | `~/.unskein/creds` | 자격증명 폴더 (SSH 키 `id_ed25519`/`id_rsa`, `known_hosts`, `.env`, askpass 스크립트) |
 | `UNSKEIN_WORK_ROOT` | `~/.unskein/work` | 다오가 repo 를 클론·작업하는 폴더 |
-| `UNSKEIN_LOOP_INTERVAL` | `30` | (loop) 빈 폴링 시 대기 초 |
-| `UNSKEIN_LOOP_MAX_EMPTY` | `0` | (loop) 연속 빈 폴링 N회 후 종료, 0=무한 |
+| `UNSKEIN_LOOP_INTERVAL` | `30` | (watch) 빈 폴링 시 대기 초 |
+| `UNSKEIN_LOOP_MAX_EMPTY` | `0` | (watch) 연속 빈 폴링 N회 후 종료, 0=무한 |
 
 ## 사용법
 
 ### Claude Code 안에서 (command)
 
 ```
-/unskein:mori-once
-/unskein:mori-loop
+/unskein:run
+/unskein:watch
+/unskein:status
 ```
+
+서버에 처음 연결할 때는 `unskein-connect` 스킬, 개발 대상 프로젝트를 등록할 때는 `unskein-add-site` 스킬을 사용한다.
 
 ### 셸에서 직접 (bin)
 
@@ -52,5 +59,5 @@
 1. `POST /api/mori/claim` (`X-Mori-Token`) 으로 backlog/answered 작업 1건 선점.
 2. 작업 → 프롬프트 변환 + `repo_url` 전송 방식(SSH/HTTPS)에 맞춰 git 자격증명 환경 구성.
 3. `UNSKEIN_WORK_ROOT` 에서 `claude -p "<prompt>" --output-format json --dangerously-skip-permissions` 실행. 다오가 prompt 지시대로 repo 를 클론(없으면)·작업·push.
-4. stdout(JSON) 파싱 → `RESULT:` / `QUESTION:` 마커 추출.
+4. stdout(JSON) 파싱 → `RESULT:` / `QUESTION:` 마커 추출 (자식 규약 문서 `orchestrator/CONTRACT.md`).
 5. `RESULT` → report, `QUESTION` → question 으로 UnSkein 에 회수.
