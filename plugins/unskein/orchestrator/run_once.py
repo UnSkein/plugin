@@ -19,6 +19,11 @@ import sys
 import urllib.error
 import urllib.request
 
+# Windows 등 비 UTF-8 콘솔(cp949 등)에서도 한글·기호 출력이 깨지지 않게 stdout/stderr 를 UTF-8 로 맞춘다.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8")
+
 API_BASE = os.getenv("UNSKEIN_API", "http://localhost:8200")
 MORI_TOKEN = os.getenv("UNSKEIN_MORI_TOKEN", "unskein-dev-mori-token")
 # claude -p 가 오래 걸릴 수 있어 넉넉히.

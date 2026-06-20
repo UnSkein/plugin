@@ -26,6 +26,11 @@ import time
 import run_once
 from run_once import _post, process_task
 
+# Windows 등 비 UTF-8 콘솔(cp949 등)에서도 한글·기호 출력이 깨지지 않게 stdout/stderr 를 UTF-8 로 맞춘다.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8")
+
 INTERVAL = int(os.getenv("UNSKEIN_LOOP_INTERVAL", "30"))
 MAX_EMPTY = int(os.getenv("UNSKEIN_LOOP_MAX_EMPTY", "0"))
 
