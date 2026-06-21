@@ -1,6 +1,6 @@
 ---
 name: unskein-doctor
-description: 모리 클라이언트가 작업을 못 돌릴 때 무엇이 깨졌는지 진단하고 복구를 안내한다 — 증상→원인 후보→복구 액션→재검증. /unskein:status 스냅샷을 출발점으로 증상에 맞는 갈래를 따라 원인을 좁힌다. 트리거 — 진단, 복구, 안 됨, 실패, doctor, 문제 해결, 토큰 인증 실패, 401, claude 못 찾음, clone 실패, push 실패, 작업 실행 실패, 화면 검증 안 됨, CDP 안 붙음, 9222 연결 실패.
+description: 모리 클라이언트가 작업을 못 돌릴 때 무엇이 깨졌는지 진단하고 복구를 안내한다 — 증상→원인 후보→복구 액션→재검증. /unskein:status 스냅샷을 출발점으로 증상에 맞는 갈래를 따라 원인을 좁힌다. 트리거 — 진단, 복구, 안 됨, 실패, doctor, 문제 해결, 토큰 인증 실패, 401, claude 못 찾음, clone 실패, push 실패, 작업 실행 실패, 화면 검증 안 됨, CDP 안 붙음, 9222 연결 실패, 스킬 충돌, CLAUDE.md 충돌, 전역 스킬 겹침, 기존 설치 충돌.
 ---
 
 # UnSkein — 진단·복구 (doctor)
@@ -43,6 +43,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/orchestrator/status.py"
 | 6 | `claude -p` 가 timeout / is_error / JSON 파싱 실패로 회수됨 | 실행 시간 초과 / claude 내부 오류 / 출력 비정상 | 아래 6번에서 원인 분기 후 확인 |
 | 7 | 서버 도달 실패(`GET /api/health`) | 네트워크·주소 문제 | 주소·네트워크 확인 |
 | 8 | 화면 검증(CDP)이 Chrome(9222)에 안 붙음 | WSL Node 로 실행해 `127.0.0.1` 이 WSL 루프백을 가리킴 / Chrome 미기동 | 윈도우 Node·PowerShell 로 실행 (`unskein-test` 6장) |
+| 9 | 모리·다오가 규약과 다르게 동작(출력 형식 어김, 엉뚱한 지침·스킬을 따름) | 기존 전역 스킬·`CLAUDE.md`·플러그인이 unskein 과 충돌 | 아래 9번에서 충돌 점검 |
 
 각 갈래의 진단·복구 절차는 아래와 같습니다.
 
@@ -143,6 +144,31 @@ powershell.exe -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/skills/unske
 
 복구: `unskein-test` 6장(실환경 검증 필요)의 안내대로 윈도우 Node·PowerShell 경로로 다시 실행합니다. 9222 가 안 떠 있으면 위 `start.ps1` 로 띄우고 `READY` 출력과 엔드포인트(`http://127.0.0.1:9222`)를 확인합니다. WSL 자체 확인만으로는 9222 도달을 보장하지 못하므로, 이 갈래는 윈도우 실환경에서 확인합니다.
 
+### 9. 기존 환경 충돌 (전역 스킬·CLAUDE.md·플러그인)
+
+unskein plugin 은 모리 클라이언트의 사용자 전역(`~/.claude`)에 설치됩니다. 같은 사용자 환경에 이미 다른 스킬·`CLAUDE.md`·플러그인이 있으면, 모리(또는 모리가 띄운 다오)가 그것까지 상속해 unskein 규약과 충돌할 수 있습니다. 또렷한 에러가 아니라 "규약과 다르게 동작"하는 형태(출력 형식을 안 지킴, 엉뚱한 지침을 따름)면 이 갈래를 의심합니다.
+
+진단 — 겹치거나 끼어드는 것이 있는지 봅니다(값이 아니라 존재·이름만):
+
+```shell
+# (1) 전역 스킬 이름이 unskein 제공 스킬과 겹치는가
+ls ~/.claude/skills/ 2>/dev/null
+#     비교 대상: unskein-connect/add-site/doctor/test (모리용),
+#     unskein-scope/exec/verify/wiki-search/wiki-record/wiki-lint (dao-skills)
+# (2) 전역 CLAUDE.md 가 있어 모리·다오 세션이 상속하는가
+ls -l ~/.claude/CLAUDE.md 2>/dev/null
+# (3) 다른 marketplace/플러그인이 /unskein:* 명령·같은 이름 스킬과 겹치는가
+ls ~/.claude/plugins/marketplaces/ 2>/dev/null
+```
+
+판정:
+
+- **스킬 이름 충돌**: 전역 `~/.claude/skills/` 에 위 unskein 스킬·dao-skills 와 같은 이름이 있으면, 같은 이름이 전역과 plugin 에 동시에 존재해 어느 것이 적용될지 모호합니다. 특히 dao-skills 이름(`unskein-scope` 등)이 전역에도 있으면, 다오가 작업 폴더 복사본(`plant_dao_skills`) 대신 전역 스킬을 읽을 위험이 있습니다.
+- **전역 CLAUDE.md 상속**: `~/.claude/CLAUDE.md` 가 있으면 모리·다오 세션이 그 지침을 함께 상속합니다. 그 안에 출력 규약·정체성·다른 에이전트 지침이 있으면 unskein 의 출력 규약(`RESULT:`/`QUESTION:`)·역할과 충돌할 수 있습니다. 다오는 작업 폴더의 `CLAUDE.md` 를 읽지만 전역 `CLAUDE.md` 도 함께 상속하므로, 둘이 어긋나면 동작이 흔들립니다.
+- **명령 충돌**: 다른 플러그인이 같은 `/unskein:*` 명령이나 같은 이름 스킬을 제공하면 호출이 엇갈립니다.
+
+복구: 충돌은 임의로 지우지 않습니다 — 무엇이 겹치는지 사용자에게 그대로 보여주고, 어느 것을 살릴지 함께 정합니다. 전역 `CLAUDE.md` 의 지침이 모리·다오 동작에 끼어들면 그 항목을 사용자에게 보고하고, unskein 규약(plugin `CLAUDE.md`·dao-skills `CLAUDE.md`)이 우선되도록 정리할지 상의합니다. 겹치는 전역 스킬은 이름을 바꾸거나 한쪽을 비활성화할지 사용자와 정합니다(fallback 으로 한쪽을 임의 삭제하지 않습니다).
+
 ## 3. 재검증
 
 복구 후 같은 단계에서 다시 확인해 증상이 사라졌는지 봅니다:
@@ -150,6 +176,7 @@ powershell.exe -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/skills/unske
 - 1·4·5·7번: `/unskein:status` 를 다시 돌려 해당 항목이 `OK` 로 바뀌었는지 확인합니다.
 - 2·3·6번: `/unskein:run` 한 바퀴를 실제로 돌려 claim·clone·push·회수까지 진행되는지 확인합니다.
 - 8번: 윈도우에서 `start.ps1` 의 `READY` 출력과 `remote.js tabs` 응답으로 Chrome(9222) 연결이 되는지 확인합니다.
+- 9번: 충돌을 정리한 뒤 `/unskein:run` 한 바퀴가 규약(`RESULT:`/`QUESTION:`)대로 회수되는지 확인합니다.
 
 증상이 사라지면 복구 완료를 알리고, 연속 처리는 `/unskein:watch` 로 안내합니다.
 
