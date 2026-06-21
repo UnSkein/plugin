@@ -14,6 +14,7 @@ stdlib 만 사용 (requests 미설치 환경). 단순 1패스 — 큐 루프/재
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import urllib.error
@@ -42,6 +43,12 @@ CRED_DIR = os.getenv(
 # 다오가 repo 를 클론·작업하는 작업 폴더. 기본 ~/.unskein/work.
 WORK_ROOT = os.getenv(
     "UNSKEIN_WORK_ROOT", os.path.expanduser(os.path.join("~", ".unskein", "work"))
+)
+# 다오 작업 폴더에 심을 스킬 원본(plugin 동봉). 기본은 run_once.py 기준 ../dao-skills.
+# CLAUDE.md(항상 규칙·출력 규약·단계 순서) + .claude/skills/(단계 스킬 6개)가 들어 있다.
+DAO_SKILLS_SRC = os.getenv(
+    "UNSKEIN_DAO_SKILLS",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dao-skills"),
 )
 # SSH 개인키. 기본 CRED_DIR/id_ed25519, 없으면 id_rsa 차선 탐색.
 SSH_KEY = os.getenv("UNSKEIN_SSH_KEY", os.path.join(CRED_DIR, "id_ed25519"))
@@ -356,6 +363,31 @@ def _post(path: str, body: dict | None = None) -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
+def plant_dao_skills(work_root: str) -> None:
+    """다오 스킬 원본(dao-skills/)을 work_root 로 복사한다 — 다오 스킬 이식.
+
+    work_root/CLAUDE.md(항상 규칙·출력 규약·단계 순서) + work_root/.claude/skills/
+    (단계 스킬)가 깔려, work_root 에서 띄운 다오 세션이 이를 자동으로 읽는다.
+    work_root 는 클론될 repo(work_root/<repo>)의 상위라, 여기 깔린 파일은
+    고객 repo 의 커밋에 섞이지 않는다.
+
+    매번 덮어써 항상 최신 상태로 둔다(단일 원본 = plugin dao-skills/).
+    원본 폴더가 없으면 배포·설치 문제이므로 raise 로 드러낸다(fallback 금지).
+    """
+    src = DAO_SKILLS_SRC
+    if not os.path.isdir(src):
+        raise RuntimeError(
+            f"다오 스킬 원본을 찾을 수 없습니다: {src} — plugin 설치/배포를 확인하세요"
+        )
+    for name in os.listdir(src):
+        s = os.path.join(src, name)
+        d = os.path.join(work_root, name)
+        if os.path.isdir(s):
+            shutil.copytree(s, d, dirs_exist_ok=True)
+        else:
+            shutil.copy2(s, d)
+
+
 def build_prompt(task: dict) -> str:
     # repo_url 에 박힌 userinfo(자격증명) 제거 — prompt/콘솔/.git config/transcript 누출 차단.
     repo = _strip_userinfo(task.get("repo_url") or "")
@@ -377,10 +409,9 @@ def build_prompt(task: dict) -> str:
         + "(credential.helper 빈 값 = 토큰 캐시 저장 차단). "
         + f"이미 있으면 그 안에서 git pull 하라.\n"
         + f"'{folder}' 안으로 들어가 작업을 수행하라.\n"
-        + "구현 후 git add + git commit + git push 하라.\n"
-        + "신뢰할 수 없는 repo 에는 --recurse-submodules 를 쓰지 마라.\n"
-        + "클론·push 가 실패하면 마지막 줄에 'QUESTION: <사유>' 를, "
-        + "완료하면 'RESULT: <한줄요약>' 를 출력하라."
+        + "작업은 CLAUDE.md 의 단계 순서(위키 검색→범위→구현→검증→기록→점검→마감→회수)를 "
+        + "따르고, 각 단계는 해당 unskein-* 스킬을 호출해 절차를 지켜라.\n"
+        + "완료/막힘 보고 형식과 push 여부는 CLAUDE.md 의 출력 규약·마감 단계를 따른다."
     )
 
 
@@ -470,6 +501,16 @@ def process_task(task: dict) -> int:
 
     # 작업 폴더 보장 — 클론은 다오가 prompt 지시로 수행하므로 cwd 는 존재하는 WORK_ROOT.
     os.makedirs(WORK_ROOT, exist_ok=True)
+
+    # 다오 스킬 이식 — WORK_ROOT 에 CLAUDE.md + .claude/skills/ 를 깐다.
+    # 원본 누락은 배포 문제이므로 QUESTION 으로 드러낸다(fallback 금지).
+    try:
+        plant_dao_skills(WORK_ROOT)
+    except Exception as e:  # noqa: BLE001 — 누락 사유를 사용자에게 그대로 회수
+        msg = str(e)
+        print(f"[error] {msg}")
+        _post(f"/api/mori/tasks/{task_id}/question", {"question": msg})
+        return 1
 
     # git 자격증명 환경 구성 — 키/토큰 누락은 QUESTION 으로 드러낸다(fallback 금지).
     try:
