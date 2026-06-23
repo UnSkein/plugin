@@ -18,7 +18,9 @@
 | skill | `unskein-test` | 다오가 만든 화면을 CDP로 런타임 UI 검증 (CDP 설치 + start/remote/stop, 콘솔·네트워크 에러 수집·캡처) |
 | 자식 규약 문서 | `orchestrator/CONTRACT.md` | 자식이 결과·질문을 오케스트레이터가 파싱할 약속 형식으로 출력하는 규약 |
 | 자식 다오 스킬 | `dao-skills/` | 모리가 작업마다 다오 작업 폴더(`WORK_ROOT`)로 복사해 **자식 다오에게** 깔아주는 운영 규약(`CLAUDE.md`) + 단계 스킬 6개. **모리 자신의 스킬이 아니다** — `skills/` 와 달리 plugin 이 로드하지 않고, `WORK_ROOT` 에서 띄운 자식 다오 세션만 읽는다. |
+| 다오 스킬 카탈로그 | `DAO-SKILLS.md` | 모리가 보는 **다오wsl 스킬 목록·용도** 참조 정보 — 다오wsl(작업 다오)에 어떤 스킬이 있고 언제 쓰는지. `dao-skills/` 의 각 `SKILL.md` 에서 자동 생성한다(직접 고치지 않는다). |
 | bin | `unskein-once`, `unskein-loop` | 셸에서 직접 실행하는 래퍼 |
+| bin | `gen-dao-catalog.py` | `dao-skills/` 에서 `DAO-SKILLS.md` 를 생성·점검(`--check`)한다. dao-skills 변경 시 다시 돌려 동기화한다. |
 
 ## 환경변수
 
@@ -44,6 +46,8 @@
 ```
 
 서버에 처음 연결할 때는 `unskein-connect` 스킬, 개발 대상 프로젝트를 등록·갱신할 때는 `unskein-add-site` 스킬을 사용한다. 작업이 안 돌면 `unskein-doctor` 로 진단·복구하고, 다오가 만든 화면을 실제로 확인할 때는 `unskein-test` 로 CDP 검증한다.
+
+작업 다오(다오wsl)에 어떤 단계 스킬이 있고 언제 쓰는지는 [`DAO-SKILLS.md`](DAO-SKILLS.md) 카탈로그를 참조한다.
 
 ### 셸에서 직접 (bin)
 

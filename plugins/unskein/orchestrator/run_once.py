@@ -388,6 +388,28 @@ def plant_dao_skills(work_root: str) -> None:
             shutil.copy2(s, d)
 
 
+# status → (이번에 수행할 단계 지시, 보고할 next status). claim 한 status 가
+# 이번 단계를 정한다 — 다오는 그 단계만 수행하고 next status 로 보고한다(단계 분할).
+STAGE_INSTRUCTIONS = {
+    "plan": (
+        "이번 단계: 범위. 먼저 unskein-wiki-search 로 기존 지식을 찾고, "
+        "unskein-scope 로 작업을 검증 가능한 수용 기준으로 정리하라."
+    ),
+    "exec": (
+        "이번 단계: 구현. unskein-exec 로 정해진 범위를 최소·수술적으로 구현하라. "
+        "이 단계에서는 커밋·push 하지 않는다(마감 단계에서만)."
+    ),
+    "test": (
+        "이번 단계: 검증. unskein-verify 로 타입체크·빌드·테스트를 돌리고 결과를 확인하라. "
+        "검증 결과 본문을 RESULT 마커의 <<<UNSKEIN_DOC 블록으로 보고하라."
+    ),
+    "inspect": (
+        "이번 단계: 기록·점검·마감. unskein-wiki-ingest 로 얻은 지식을 기록하고, "
+        "unskein-wiki-lint 로 문서 부패를 점검한 뒤, unskein-deploy 로 커밋·머지·push 하라."
+    ),
+}
+
+
 def build_prompt(task: dict) -> str:
     # repo_url 에 박힌 userinfo(자격증명) 제거 — prompt/콘솔/.git config/transcript 누출 차단.
     repo = _strip_userinfo(task.get("repo_url") or "")
@@ -395,11 +417,31 @@ def build_prompt(task: dict) -> str:
     title = task.get("title") or ""
     description = task.get("description") or ""
     project_name = task.get("project_name") or ""
+    status = task.get("status") or ""
     header = f"작업: {title}\n"
     if project_name:
         header += f"프로젝트: {project_name}\n"
     if description:
         header += f"{description}\n"
+
+    # 이번 단계 지시 — claim 한 status 가 단계를 정한다(매핑 없으면 unknown 단계로 드러냄).
+    stage_line = STAGE_INSTRUCTIONS.get(
+        status,
+        f"이번 단계 매핑이 없습니다(status={status}). "
+        "QUESTION 으로 어떤 단계인지 물어라.",
+    )
+
+    # 이전 단계 저장본을 프롬프트에 주입(있을 때만 — 빈값 강제 금지).
+    prior = ""
+    if status == "exec":
+        plan_doc = task.get("plan_doc")
+        if plan_doc:
+            prior = f"\n이전 단계 계획:\n{plan_doc}\n"
+    elif status == "inspect":
+        result_doc = task.get("result_doc")
+        if result_doc:
+            prior = f"\n검증 결과:\n{result_doc}\n"
+
     return (
         header
         + f"대상 repo: {repo}\n"
@@ -409,9 +451,15 @@ def build_prompt(task: dict) -> str:
         + "(credential.helper 빈 값 = 토큰 캐시 저장 차단). "
         + f"이미 있으면 그 안에서 git pull 하라.\n"
         + f"'{folder}' 안으로 들어가 작업을 수행하라.\n"
-        + "작업은 CLAUDE.md 의 단계 순서(위키 검색→범위→구현→검증→기록→점검→마감→회수)를 "
-        + "따르고, 각 단계는 해당 unskein-* 스킬을 호출해 절차를 지켜라.\n"
-        + "완료/막힘 보고 형식과 push 여부는 CLAUDE.md 의 출력 규약·마감 단계를 따른다."
+        + stage_line
+        + "\n"
+        + prior
+        + "\n현재 단계만 수행하고 다음 status 로 보고하라. "
+        + "전체 단계 순서를 한 번에 밟지 않는다 — 다음 단계는 모리가 다음에 다시 선점한다.\n"
+        + "완료 보고는 CLAUDE.md 4.1 출력 규약을 따른다 — "
+        + "'RESULT: status=<다음 status> stage=<단계명> summary=<요약>' 첫 줄, "
+        + "산출물이 있으면 그 아래 '<<<UNSKEIN_DOC' ~ 'UNSKEIN_DOC' 펜스 블록. "
+        + "막히면 'QUESTION: <질문>' 한 줄."
     )
 
 
@@ -454,20 +502,78 @@ def parse_result(stdout: str) -> tuple[str | None, str | None, str | None]:
     return session_id, result_text, None
 
 
-def extract_marker(result_text: str) -> tuple[str, str]:
-    """result 텍스트에서 RESULT:/QUESTION: 마커 추출. (kind, content) 반환.
+def extract_marker(
+    result_text: str,
+) -> tuple[str, str | None, str | None, str | None, str | None]:
+    """result 텍스트에서 RESULT:/QUESTION: 마커 추출.
 
+    반환: (kind, status, stage, summary, doc).
     kind 는 'result' | 'question' | 'unknown'.
+
+    RESULT 마커(단계 완료, 다중 줄 + 펜스 블록):
+        RESULT: status=<next_status> stage=<stage> summary=<한 줄 요약>
+        <<<UNSKEIN_DOC
+        <단계 산출물 본문 (markdown, 여러 줄 허용)>
+        UNSKEIN_DOC
+      - 메타는 공백 구분 key=value(status, stage, summary 순). summary 는 마지막
+        키라 'summary=' 이후 그 줄 끝까지 전부가 값(공백 포함 허용).
+      - 여는 토큰: 줄 전체가 정확히 '<<<UNSKEIN_DOC'. 닫는 토큰: 줄 전체가 'UNSKEIN_DOC'.
+        펜스 본문은 원본 들여쓰기를 보존한다(markdown). 산출물 없는 단계는 펜스 생략 → doc=None.
+      - status= 가 없으면 kind='unknown' (자동 done 금지).
+
+    QUESTION 마커(막힘, 한 줄):
+        QUESTION: <질문 내용>
+      → ('question', None, None, 질문내용, None).
+
+    마커가 전혀 없으면 ('unknown', None, None, 마지막줄, None).
     """
-    lines = [ln.strip() for ln in (result_text or "").splitlines() if ln.strip()]
-    for ln in reversed(lines):
-        if ln.startswith("RESULT:"):
-            return "result", ln[len("RESULT:"):].strip()
-        if ln.startswith("QUESTION:"):
-            return "question", ln[len("QUESTION:"):].strip()
-    # 마커가 없으면 마지막 줄을 결과로 본다.
-    tail = lines[-1] if lines else (result_text or "").strip()
-    return "unknown", tail
+    raw_lines = (result_text or "").splitlines()
+    # 줄 단위(원본 유지)로 뒤에서부터 'RESULT:'/'QUESTION:' 탐색.
+    for i in range(len(raw_lines) - 1, -1, -1):
+        stripped = raw_lines[i].strip()
+        if stripped.startswith("QUESTION:"):
+            return "question", None, None, stripped[len("QUESTION:"):].strip(), None
+        if stripped.startswith("RESULT:"):
+            meta = stripped[len("RESULT:"):].strip()
+            status, stage, summary = _parse_result_meta(meta)
+            doc = None
+            # 바로 다음 줄이 여는 토큰이면 닫는 토큰까지 본문 수집(원본 들여쓰기 보존).
+            if i + 1 < len(raw_lines) and raw_lines[i + 1].strip() == "<<<UNSKEIN_DOC":
+                body: list[str] = []
+                j = i + 2
+                while j < len(raw_lines) and raw_lines[j].strip() != "UNSKEIN_DOC":
+                    body.append(raw_lines[j])
+                    j += 1
+                doc = "\n".join(body)
+            if not status:
+                # status 누락 → 자동 done 금지. 요약만 들고 unknown 으로.
+                return "unknown", None, stage, summary, doc
+            return "result", status, stage, summary, doc
+    # 마커가 전혀 없으면 마지막(비어있지 않은) 줄을 요약으로 본다.
+    tail_lines = [ln.strip() for ln in raw_lines if ln.strip()]
+    tail = tail_lines[-1] if tail_lines else (result_text or "").strip()
+    return "unknown", None, None, tail, None
+
+
+def _parse_result_meta(meta: str) -> tuple[str | None, str | None, str | None]:
+    """'status=.. stage=.. summary=..' 메타 한 줄 파싱. (status, stage, summary).
+
+    키 순서는 status, stage, summary. summary 는 마지막 키라 'summary=' 이후
+    그 줄 끝까지 전부가 값(공백 포함). 누락 키는 None.
+    """
+    status = stage = summary = None
+    rest = meta
+    # summary 는 그 줄 끝까지라 먼저 떼어낸다(공백 포함 값 보존).
+    idx = rest.find("summary=")
+    if idx != -1:
+        summary = rest[idx + len("summary="):].strip() or None
+        rest = rest[:idx].strip()
+    for tok in rest.split():
+        if tok.startswith("status="):
+            status = tok[len("status="):].strip() or None
+        elif tok.startswith("stage="):
+            stage = tok[len("stage="):].strip() or None
+    return status, stage, summary
 
 
 def guess_transcript_path(session_id: str | None, cwd: str) -> str | None:
@@ -550,25 +656,36 @@ def process_task(task: dict) -> int:
     print(f"[dao] session_id={session_id}")
     print(f"[dao result]\n{result_text}\n")
 
-    kind, content = extract_marker(result_text)
+    kind, status, stage, summary, doc = extract_marker(result_text)
     transcript = guess_transcript_path(session_id, WORK_ROOT)
 
     # 5) 회수
     if kind == "question":
-        print(f"[report] QUESTION → {content}")
-        _post(f"/api/mori/tasks/{task_id}/question", {"question": content})
-    else:
-        summary = content if kind == "result" else f"(마커 없음) {content}"
-        print(f"[report] RESULT → {summary}")
+        print(f"[report] QUESTION → {summary}")
+        _post(f"/api/mori/tasks/{task_id}/question", {"question": summary})
+    elif kind == "result":
+        # 단계 전이는 오직 마커의 next status 로만 일어난다(하드코딩 done 금지).
+        print(f"[report] RESULT → status={status} stage={stage} summary={summary}")
         _post(
             f"/api/mori/tasks/{task_id}/report",
             {
                 "summary": summary,
                 "session_id": session_id,
                 "transcript_path": transcript,
-                "status": "done",
+                "status": status,
+                "stage": stage,
+                "doc": doc,
             },
         )
+    else:
+        # 마커/status 누락 → 자동 done 금지. 규약대로 보고하지 않았음을 QUESTION 으로 드러낸다(fallback 금지).
+        msg = (
+            "다오가 단계 완료 마커를 규약대로 내지 않았습니다 "
+            "(RESULT: status=.. 펜스 마커 누락). 마지막 출력: "
+            + (summary or "(없음)")
+        )
+        print(f"[report] UNKNOWN → {msg}")
+        _post(f"/api/mori/tasks/{task_id}/question", {"question": msg})
     print("[done] 한 바퀴 완료.")
     return 0
 
