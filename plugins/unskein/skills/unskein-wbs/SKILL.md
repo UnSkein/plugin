@@ -41,6 +41,8 @@ DELETE /api/tasks/{id}                    노드 삭제
 
 > 로컬을 DB로 직접 다룰 때는 `business`/`project`/`task` 모델을 쓰되, `parent_id`는 부모 wbs_code로 조회해 잡고, 멱등(같은 wbs_code 있으면 skip)하게 한다. (이름으로 조회 → DB·API 어디서 돌려도 이식 가능.)
 
+**스콥/계획 본문은 `plan_doc`에 넣는다 — 이 스킬의 핵심 자리.** 한 노드의 스콥(수용 기준·계획 본문)은 **다음 단계(exec)가 읽는 `plan_doc` 필드**에 데이터로 주입한다. `PATCH /api/tasks/{id}` 의 `plan_doc`(로컬은 DB 직접)으로 set/edit 하며, **status 전이와 분리**한다 — 스콥을 넣어도 상태를 바꾸지 않는다. `/plan` 승인 엔드포인트(backlog→plan 강제 전이)는 쓰지 않는다(status·승인은 별개 단계·사람 몫). **스콥 *작성*은 이 스킬의 롤이 아니다** — 외부(다른 세션·`/unskein-scope` 스킬·사람)가 정의한 스콥을 받아 정확한 위치에 넣을 뿐이다(플랜을 포함한 스콥 생성 과정은 운영자가 관여). 웹 UI의 스콥 등록·편집도 같은 `plan_doc` PATCH 경로를 쓴다.
+
 ## 4. Create (노드 추가)
 
 1. 대상 프로젝트의 현재 노드를 조회해 `wbs_code → id` 맵과 최대 `sort_order`를 만든다.
@@ -51,7 +53,7 @@ DELETE /api/tasks/{id}                    노드 삭제
 
 ## 5. Update / Delete
 
-- **Update**: `PATCH /api/tasks/{id}` 로 `title/description/status/wbs_code/sort_order/parent_id/progress/is_milestone` 등 변경. 트리 위치를 바꾸면(부모/코드 변경) 자식들의 wbs_code도 일관되게 갱신한다. 문서도 동일 반영.
+- **Update**: `PATCH /api/tasks/{id}` 로 `title/description/plan_doc(스콥·계획 본문)/status/wbs_code/sort_order/parent_id/progress/is_milestone` 등 변경. 트리 위치를 바꾸면(부모/코드 변경) 자식들의 wbs_code도 일관되게 갱신한다. 문서도 동일 반영.
 - **Delete**: `DELETE /api/tasks/{id}`. 하위가 있으면 자손까지(말단부터) 지운다 — 고아 노드를 남기지 않는다. 문서에서도 해당 블록을 제거.
 - 파괴적 변경(삭제·대량 수정)·프로덕션 대상은 실행 전 범위를 확인한다.
 
