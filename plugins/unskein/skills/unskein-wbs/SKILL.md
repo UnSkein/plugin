@@ -22,8 +22,9 @@ description: WBS(작업 분해 구조) 관리 — 비즈니스/프로젝트의 W
 
 1. **대상**: 비즈니스 이름 + 프로젝트 이름(예: `MUPAI STUDIO` / `UNSKEIN_SAAS`). 이름으로 id를 조회한다(id 하드코딩 금지 — 환경마다 다르다).
 2. **환경**: `local`(개발 백엔드/DB) / `production`(`https://unskein.mupai.studio`) / 둘 다. ido 지시에 따른다.
-   - 프로덕션은 VM 직접 접근(gcloud/SSH)이 없다 → **API로만** 작업한다.
+   - 프로덕션: **API(admin 로그인)** 가 1차 경로. gcloud로 VM 직접 접근(SSH·DB)도 가능하다(`docs/deploy.md` 접근 정보 — project `epic-framework`, gcloud 설치·인증 완료). API로 안 되는 작업(예: 새 컬럼 의존 PATCH는 backend 재배포 선행)만 VM 경로를 쓴다.
    - 로컬은 백엔드 API 또는 DB 직접(둘 다 가능). 일관성을 위해 가능하면 API를 쓴다.
+   - 같은 변경을 양쪽에 반영할 때 **id는 환경마다 다르다** — 항상 이름+wbs_code로 조회한다.
 
 ## 3. 인증·엔드포인트 (API 경로)
 
