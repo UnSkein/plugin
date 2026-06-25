@@ -1,27 +1,32 @@
 #!/usr/bin/env python3
-"""모리 폴링 루프 — UnSkein 작업 큐를 무한 폴링하며 다오(claude -p)로 처리한다.
+"""모리 조율자 루프 — UnSkein 작업 큐를 폴링하며 다오(claude -p)를 동시 구동한다.
 
 흐름:
-  매 tick 마다 POST /api/mori/claim 으로 작업 1건 선점 시도.
-  - 작업 있으면 run_once.process_task 로 한 바퀴 처리 (프롬프트 → claude -p →
-    parse → report/question 회수). 처리 직후 곧바로 다음 tick (대기 없이 연속 처리).
-  - 작업 없으면 INTERVAL 초 대기 후 재시도. 빈 tick 카운트 증가.
+  풀에 여유 슬롯이 있는 한 매 tick 마다 POST /api/mori/claim 으로 작업을 선점하고,
+  스레드 풀 워커에서 run_once.process_task 로 처리한다(작업별 격리 폴더 +
+  주기적 heartbeat). 동시 한도는 UNSKEIN_MAX_CONCURRENCY. 풀이 가득 차면 슬롯이
+  빌 때까지 대기하고, 선점할 작업이 없으면 INTERVAL 초 대기한다.
+
+  단일 조율자 + 동시 다오 풀(ADR-0006). claim 은 조율자 스레드 한 곳에서만 하므로
+  중복 선점이 없고(서버 SKIP LOCKED 가 이차 방어), 다오 실행만 워커로 흩어진다.
 
 옵션 (env 또는 argv):
-  UNSKEIN_LOOP_INTERVAL   빈 tick 시 대기 초 (기본 30).
-  UNSKEIN_LOOP_MAX_EMPTY  연속 빈 tick 이 값에 도달하면 종료 (기본 0 = 무한).
+  UNSKEIN_LOOP_INTERVAL    빈 tick 시 대기 초 (기본 30).
+  UNSKEIN_LOOP_MAX_EMPTY   연속 빈 tick 이 값에 도달 + 진행 중 0 이면 종료 (기본 0 = 무한).
+  UNSKEIN_MAX_CONCURRENCY  동시 다오 수 (기본 3).
+  UNSKEIN_HEARTBEAT_INTERVAL  작업별 heartbeat 주기 초 (기본 60).
   argv 로도 받음: `run_loop.py [INTERVAL] [MAX_EMPTY]`.
 
-claim 응답에는 이미 heartbeat_at 이 기록되지만, claim 직후 한 번 더
-heartbeat 를 찍어 처리 시작 시각을 명확히 남긴다.
-
-SIGINT(Ctrl-C) 로 깔끔히 종료한다. stdlib 만 사용.
+SIGINT(Ctrl-C) 로 깔끔히 종료한다 — 새 선점을 멈추고 진행 중 작업을 마저 기다린다.
+stdlib 만 사용.
 """
 
 import os
 import signal
 import sys
+import threading
 import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 import run_once
 from run_once import (
@@ -45,6 +50,8 @@ apply_watch_args(_wb, _wp)
 
 INTERVAL = int(os.getenv("UNSKEIN_LOOP_INTERVAL", "30"))
 MAX_EMPTY = int(os.getenv("UNSKEIN_LOOP_MAX_EMPTY", "0"))
+MAX_CONCURRENCY = max(1, int(os.getenv("UNSKEIN_MAX_CONCURRENCY", "3")))
+HEARTBEAT_INTERVAL = int(os.getenv("UNSKEIN_HEARTBEAT_INTERVAL", "60"))
 
 # 위치 인자: run_loop.py [INTERVAL] [MAX_EMPTY] (watch 키워드 제외 후)
 if len(_positionals) >= 1:
@@ -58,15 +65,33 @@ _STOP = False
 def _on_sigint(signum, frame):
     global _STOP
     _STOP = True
-    print("\n[loop] SIGINT 수신 — 현재 tick 후 종료합니다.", flush=True)
+    print("\n[loop] SIGINT 수신 — 새 선점을 멈추고 진행 중 작업 완료 후 종료합니다.", flush=True)
 
 
-def heartbeat(task_id: int) -> None:
-    """처리 시작 직후 heartbeat 1회. 실패해도 루프는 계속."""
+def _process_with_heartbeat(task: dict) -> int:
+    """작업을 처리하면서 주기적으로 heartbeat 를 찍는다(동시·장시간 실행 대비).
+
+    풀 워커 스레드에서 돈다. heartbeat 스레드가 시작 직후 1회 + 이후
+    HEARTBEAT_INTERVAL 마다 찍고, 작업이 끝나면 멈춘다. heartbeat 실패는 무시한다.
+    """
+    task_id = task["id"]
+    stop = threading.Event()
+
+    def _beat() -> None:
+        while True:
+            try:
+                _post(f"/api/mori/tasks/{task_id}/heartbeat")
+            except Exception:  # noqa: BLE001 — heartbeat 실패가 처리를 막지 않게.
+                pass
+            if stop.wait(HEARTBEAT_INTERVAL):
+                return
+
+    beat = threading.Thread(target=_beat, daemon=True)
+    beat.start()
     try:
-        _post(f"/api/mori/tasks/{task_id}/heartbeat")
-    except Exception as exc:  # noqa: BLE001 — heartbeat 실패가 처리 흐름을 막지 않게.
-        print(f"[loop] heartbeat 실패 (무시): {exc}", flush=True)
+        return process_task(task)
+    finally:
+        stop.set()
 
 
 def main() -> int:
@@ -84,6 +109,12 @@ def main() -> int:
         )
         return 1
 
+    # 자율 루프 안전 가드 — 범위 미지정 + 원격 서버는 막는다(두 모리 경쟁 사고 방지).
+    block = run_once.autonomous_scope_block()
+    if block:
+        print(f"[loop] 시작 거부 — {block}", flush=True)
+        return 1
+
     # watch 대상 검증 — 잘못 지정했으면 폴링 시작 전에 멈춘다(조용한 전체 폴백 금지).
     ok, label = resolve_watch_scope()
     if not ok:
@@ -91,75 +122,95 @@ def main() -> int:
         return 1
 
     print(
-        f"[loop] 시작 — interval={INTERVAL}s max_empty="
-        f"{MAX_EMPTY or '무한'} api={run_once.API_BASE} watch={label}",
+        f"[loop] 시작 — interval={INTERVAL}s max_empty={MAX_EMPTY or '무한'} "
+        f"concurrency={MAX_CONCURRENCY} api={run_once.API_BASE} watch={label}",
         flush=True,
     )
 
     tick = 0
     empty_streak = 0
     processed = 0
+    inflight: dict = {}  # future -> task_id
 
-    while not _STOP:
-        tick += 1
-        try:
-            claim = _post("/api/mori/claim", _claim_body())
-        except Exception as exc:  # noqa: BLE001 — backend 일시 장애로 루프 중단 안 함.
-            print(f"[tick {tick}] claim 실패: {exc} — {INTERVAL}s 후 재시도", flush=True)
-            empty_streak = 0  # 장애는 빈 tick 으로 세지 않는다.
-            _sleep(INTERVAL)
-            continue
-
-        if not claim.get("claimed"):
-            empty_streak += 1
+    def _drain_done() -> None:
+        """완료된 future 를 회수해 결과를 찍는다."""
+        nonlocal processed
+        for fut in [f for f in inflight if f.done()]:
+            tid = inflight.pop(fut)
+            try:
+                rc = fut.result()
+                outcome = "성공" if rc == 0 else "실패(question 회수)"
+            except Exception as exc:  # noqa: BLE001 — 한 작업 실패가 루프를 죽이지 않게.
+                outcome = f"예외: {exc}"
+                try:
+                    _post(
+                        f"/api/mori/tasks/{tid}/question",
+                        {"question": f"루프 처리 중 예외: {exc}"},
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+            processed += 1
             print(
-                f"[tick {tick}] 빈 tick (연속 {empty_streak}) — "
-                f"선점할 작업 없음",
+                f"[loop] task#{tid} 처리 완료 — {outcome} (진행 중 {len(inflight)})",
                 flush=True,
             )
-            if MAX_EMPTY and empty_streak >= MAX_EMPTY:
+
+    with ThreadPoolExecutor(max_workers=MAX_CONCURRENCY) as pool:
+        while not _STOP:
+            _drain_done()
+
+            if len(inflight) >= MAX_CONCURRENCY:
+                # 풀이 가득 — 하나 끝날 때까지 잠깐 대기(회수는 다음 루프 _drain_done).
+                wait(list(inflight), timeout=1, return_when=FIRST_COMPLETED)
+                continue
+
+            # 여유 슬롯 — 새 작업 선점 시도.
+            tick += 1
+            try:
+                claim = _post("/api/mori/claim", _claim_body())
+            except Exception as exc:  # noqa: BLE001 — backend 일시 장애로 루프 중단 안 함.
+                print(f"[tick {tick}] claim 실패: {exc} — {INTERVAL}s 후 재시도", flush=True)
+                empty_streak = 0  # 장애는 빈 tick 으로 세지 않는다.
+                _sleep(INTERVAL)
+                continue
+
+            if claim.get("claimed"):
+                empty_streak = 0
+                task = claim["task"]
+                task_id = task["id"]
                 print(
-                    f"[loop] 연속 빈 tick {empty_streak} >= max_empty "
-                    f"{MAX_EMPTY} — 종료.",
+                    f"[tick {tick}] claim task#{task_id} '{task.get('title', '')}' "
+                    f"repo={task.get('repo_url') or ''} "
+                    f"(진행 중 {len(inflight) + 1}/{MAX_CONCURRENCY})",
+                    flush=True,
+                )
+                inflight[pool.submit(_process_with_heartbeat, task)] = task_id
+                continue  # 여유 있으면 대기 없이 바로 다음 선점.
+
+            # 빈 tick — 선점할 작업 없음.
+            empty_streak += 1
+            print(
+                f"[tick {tick}] 빈 tick (연속 {empty_streak}) — 선점할 작업 없음 "
+                f"(진행 중 {len(inflight)})",
+                flush=True,
+            )
+            if MAX_EMPTY and empty_streak >= MAX_EMPTY and not inflight:
+                print(
+                    f"[loop] 연속 빈 tick {empty_streak} >= max_empty {MAX_EMPTY} "
+                    "+ 진행 중 0 — 종료.",
                     flush=True,
                 )
                 break
             _sleep(INTERVAL)
-            continue
 
-        # 작업 선점됨 — 연속 처리 (대기 없이 다음 tick 으로).
-        empty_streak = 0
-        task = claim["task"]
-        task_id = task["id"]
-        title = task.get("title", "")
-        print(
-            f"[tick {tick}] claim task#{task_id} '{title}' "
-            f"repo={task.get('repo_url') or ''}",
-            flush=True,
-        )
-        heartbeat(task_id)
-
-        try:
-            rc = process_task(task)
-        except Exception as exc:  # noqa: BLE001 — 한 작업 실패가 루프 전체를 죽이지 않게.
-            print(f"[tick {tick}] task#{task_id} 처리 중 예외: {exc}", flush=True)
-            try:
-                _post(
-                    f"/api/mori/tasks/{task_id}/question",
-                    {"question": f"루프 처리 중 예외: {exc}"},
-                )
-            except Exception:  # noqa: BLE001
-                pass
-            rc = 1
-
-        processed += 1
-        outcome = "성공" if rc == 0 else "실패(question 회수)"
-        print(f"[tick {tick}] task#{task_id} 처리 완료 — {outcome}", flush=True)
-        # 처리 직후 곧바로 다음 tick (연속 처리). 대기하지 않는다.
+        # 종료 — 진행 중 작업을 마저 기다린다(취소하지 않음).
+        if inflight:
+            print(f"[loop] 종료 신호 — 진행 중 {len(inflight)}건 완료 대기...", flush=True)
+            wait(list(inflight))
+            _drain_done()
 
     print(
-        f"[loop] 종료 — 총 tick {tick}, 처리 {processed}건, "
-        f"연속 빈 tick {empty_streak}",
+        f"[loop] 종료 — 총 tick {tick}, 처리 {processed}건, 연속 빈 tick {empty_streak}",
         flush=True,
     )
     return 0
