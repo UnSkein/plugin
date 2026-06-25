@@ -528,7 +528,8 @@ STAGE_INSTRUCTIONS = {
     ),
     "inspect": (
         "이번 단계: 기록·점검·마감. unskein-wiki-ingest 로 얻은 지식을 기록하고, "
-        "unskein-wiki-lint 로 문서 부패를 점검한 뒤, unskein-deploy 로 커밋·머지·push 하라."
+        "unskein-wiki-lint 로 문서 부패를 점검한 뒤, unskein-git 으로 feature 브랜치에 "
+        "커밋·push 하고 PR 을 만들어라. master 직접 머지·배포는 하지 않는다(머지되면 자동 배포)."
     ),
 }
 
