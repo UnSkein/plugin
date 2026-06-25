@@ -36,6 +36,64 @@ if not MORI_TOKEN:
 # claude -p 가 오래 걸릴 수 있어 넉넉히.
 CLAUDE_TIMEOUT = int(os.getenv("UNSKEIN_CLAUDE_TIMEOUT", "600"))
 
+# watch 대상 — 이 클라이언트가 바라볼 프로덕션 작업의 범위를 좁힌다(이름으로 지정).
+# 둘 다 비우면 토큰 사용자의 모든 비즈니스/프로젝트가 대상(기존 동작).
+# id 는 환경별로 다르므로 이름으로 지정한다(서버가 멤버십 안에서 매칭).
+WATCH_BUSINESS = os.getenv("UNSKEIN_WATCH_BUSINESS") or None
+WATCH_PROJECT = os.getenv("UNSKEIN_WATCH_PROJECT") or None
+
+# watch 대상 키워드(인자/명령줄에서 인식). 짧은형(bis/prj)·풀네임·플래그·key=value 모두 허용.
+_WATCH_BIZ_KEYS = {"business", "bis", "--business", "-b"}
+_WATCH_PRJ_KEYS = {"project", "prj", "--project", "-p"}
+
+
+def parse_watch_args(argv: list[str]) -> tuple[str | None, str | None, list[str]]:
+    """argv 에서 watch 대상(비즈니스/프로젝트)을 뽑고 나머지 위치 인자를 돌려준다.
+
+    인식 형식(값에 공백 있으면 따옴표로 묶는다):
+      bis "이름" prj "이름"  /  business <이름> project <이름>
+      --business <이름> --project <이름>  /  -b <이름> -p <이름>
+      bis=이름  business=이름  prj=이름  project=이름
+    반환 (business, project, positionals). 못 만나면 해당 값은 None.
+    """
+    business = project = None
+    positionals: list[str] = []
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        key = tok.lower()
+        if "=" in tok and key.split("=", 1)[0] in (_WATCH_BIZ_KEYS | _WATCH_PRJ_KEYS):
+            k, _, v = tok.partition("=")
+            if k.lower() in _WATCH_BIZ_KEYS:
+                business = v
+            else:
+                project = v
+            i += 1
+            continue
+        if key in _WATCH_BIZ_KEYS and i + 1 < len(argv):
+            business = argv[i + 1]
+            i += 2
+            continue
+        if key in _WATCH_PRJ_KEYS and i + 1 < len(argv):
+            project = argv[i + 1]
+            i += 2
+            continue
+        positionals.append(tok)
+        i += 1
+    return business, project, positionals
+
+
+def apply_watch_args(business: str | None, project: str | None) -> None:
+    """argv 로 받은 watch 대상으로 모듈 전역을 덮어쓴다(인자가 env 보다 우선).
+
+    값이 None(인자 미지정)이면 env 기본값을 그대로 둔다. 빈 문자열은 '대상 없음'.
+    """
+    global WATCH_BUSINESS, WATCH_PROJECT
+    if business is not None:
+        WATCH_BUSINESS = business or None
+    if project is not None:
+        WATCH_PROJECT = project or None
+
 # 자격증명(SSH 키 / 토큰 / known_hosts)을 모아두는 폴더. 부모 환경 또는 기본 ~/.unskein/creds.
 CRED_DIR = os.getenv(
     "UNSKEIN_CRED_DIR", os.path.expanduser(os.path.join("~", ".unskein", "creds"))
@@ -361,6 +419,71 @@ def _post(path: str, body: dict | None = None) -> dict:
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def _get(path: str) -> dict:
+    req = urllib.request.Request(
+        f"{API_BASE}{path}",
+        method="GET",
+        headers={"X-Mori-Token": MORI_TOKEN},
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _claim_body() -> dict:
+    """claim 에 실어 보낼 watch 대상 필터. 미지정 항목은 넣지 않는다."""
+    body: dict = {}
+    if WATCH_BUSINESS:
+        body["business"] = WATCH_BUSINESS
+    if WATCH_PROJECT:
+        body["project"] = WATCH_PROJECT
+    return body
+
+
+def watch_label() -> str:
+    """현재 watch 대상을 사람이 읽을 한 줄로."""
+    if not WATCH_BUSINESS and not WATCH_PROJECT:
+        return "전체 (대상 미지정)"
+    biz = WATCH_BUSINESS or "(전체 비즈니스)"
+    return f"{biz} / {WATCH_PROJECT}" if WATCH_PROJECT else biz
+
+
+def resolve_watch_scope() -> tuple[bool, str]:
+    """watch 대상(env)이 서버에서 보이는 비즈니스/프로젝트에 매칭되는지 사전 검증.
+
+    반환 (ok, message). 대상 미지정이면 검증 없이 통과한다.
+    이름이 멤버십에 없으면 가능한 이름을 곁들여 ok=False 로 드러낸다
+    (조용한 fallback 금지 — 잘못된 대상이면 멈춘다).
+    """
+    if not WATCH_BUSINESS and not WATCH_PROJECT:
+        return True, watch_label()
+    try:
+        scope = _get("/api/mori/scope")
+    except Exception as exc:  # noqa: BLE001 — 검증 실패 사유를 그대로 드러낸다
+        return False, f"watch 대상 검증 실패(서버 도달/토큰 확인): {exc}"
+    businesses = scope.get("businesses", []) or []
+    target = businesses
+    if WATCH_BUSINESS:
+        target = [b for b in businesses if b.get("name") == WATCH_BUSINESS]
+        if not target:
+            avail = ", ".join(b.get("name", "") for b in businesses) or "(없음)"
+            return False, (
+                f"watch 대상 비즈니스 '{WATCH_BUSINESS}' 를 찾을 수 없습니다. "
+                f"가능한 비즈니스: {avail}"
+            )
+    if WATCH_PROJECT:
+        proj_names = [
+            p.get("name") for b in target for p in (b.get("projects") or [])
+        ]
+        if WATCH_PROJECT not in proj_names:
+            avail = ", ".join(n for n in proj_names if n) or "(없음)"
+            where = f"비즈니스 '{WATCH_BUSINESS}'" if WATCH_BUSINESS else "내 비즈니스"
+            return False, (
+                f"watch 대상 프로젝트 '{WATCH_PROJECT}' 를 {where} 에서 찾을 수 없습니다. "
+                f"가능한 프로젝트: {avail}"
+            )
+    return True, watch_label()
 
 
 def plant_dao_skills(work_root: str) -> None:
@@ -691,10 +814,20 @@ def process_task(task: dict) -> int:
 
 
 def main() -> int:
-    # 1) claim
-    claim = _post("/api/mori/claim")
+    # 0) watch 대상 — 인자(bis/prj 등)로 받으면 env 보다 우선 적용한 뒤 검증한다.
+    _b, _p, _ = parse_watch_args(sys.argv[1:])
+    apply_watch_args(_b, _p)
+    # 잘못 지정했으면 선점 전에 멈춘다(조용한 전체 폴백 금지).
+    ok, label = resolve_watch_scope()
+    if not ok:
+        print(f"[watch] {label}")
+        return 1
+    print(f"[watch] 대상: {label}")
+
+    # 1) claim (watch 대상 필터를 실어 보낸다)
+    claim = _post("/api/mori/claim", _claim_body())
     if not claim.get("claimed"):
-        print("선점할 작업이 없습니다 (backlog/answered 0건).")
+        print("선점할 작업이 없습니다 (대상 범위 내 plan/answered 0건).")
         return 0
     task = claim["task"]
     print(f"[claim] task#{task['id']} '{task['title']}' repo={task.get('repo_url') or ''}")

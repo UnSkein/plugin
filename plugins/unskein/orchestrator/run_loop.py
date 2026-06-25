@@ -24,21 +24,33 @@ import sys
 import time
 
 import run_once
-from run_once import _post, process_task
+from run_once import (
+    _claim_body,
+    _post,
+    apply_watch_args,
+    parse_watch_args,
+    process_task,
+    resolve_watch_scope,
+)
 
 # Windows 등 비 UTF-8 콘솔(cp949 등)에서도 한글·기호 출력이 깨지지 않게 stdout/stderr 를 UTF-8 로 맞춘다.
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(encoding="utf-8")
 
+# watch 대상 키워드(bis/prj 등)를 먼저 뽑아 env 보다 우선 적용하고,
+# 남은 위치 인자만 INTERVAL/MAX_EMPTY 로 쓴다(기존 위치 인자 호환).
+_wb, _wp, _positionals = parse_watch_args(sys.argv[1:])
+apply_watch_args(_wb, _wp)
+
 INTERVAL = int(os.getenv("UNSKEIN_LOOP_INTERVAL", "30"))
 MAX_EMPTY = int(os.getenv("UNSKEIN_LOOP_MAX_EMPTY", "0"))
 
-# argv 우선: run_loop.py [INTERVAL] [MAX_EMPTY]
-if len(sys.argv) >= 2:
-    INTERVAL = int(sys.argv[1])
-if len(sys.argv) >= 3:
-    MAX_EMPTY = int(sys.argv[2])
+# 위치 인자: run_loop.py [INTERVAL] [MAX_EMPTY] (watch 키워드 제외 후)
+if len(_positionals) >= 1:
+    INTERVAL = int(_positionals[0])
+if len(_positionals) >= 2:
+    MAX_EMPTY = int(_positionals[1])
 
 _STOP = False
 
@@ -60,9 +72,15 @@ def heartbeat(task_id: int) -> None:
 def main() -> int:
     signal.signal(signal.SIGINT, _on_sigint)
 
+    # watch 대상 검증 — 잘못 지정했으면 폴링 시작 전에 멈춘다(조용한 전체 폴백 금지).
+    ok, label = resolve_watch_scope()
+    if not ok:
+        print(f"[loop] watch 대상 오류 — {label}", flush=True)
+        return 1
+
     print(
         f"[loop] 시작 — interval={INTERVAL}s max_empty="
-        f"{MAX_EMPTY or '무한'} api={run_once.API_BASE}",
+        f"{MAX_EMPTY or '무한'} api={run_once.API_BASE} watch={label}",
         flush=True,
     )
 
@@ -73,7 +91,7 @@ def main() -> int:
     while not _STOP:
         tick += 1
         try:
-            claim = _post("/api/mori/claim")
+            claim = _post("/api/mori/claim", _claim_body())
         except Exception as exc:  # noqa: BLE001 — backend 일시 장애로 루프 중단 안 함.
             print(f"[tick {tick}] claim 실패: {exc} — {INTERVAL}s 후 재시도", flush=True)
             empty_streak = 0  # 장애는 빈 tick 으로 세지 않는다.

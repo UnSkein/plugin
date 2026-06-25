@@ -4,12 +4,14 @@
 점검 항목:
   - UNSKEIN_API (미설정 시 기본값 표기)
   - UNSKEIN_MORI_TOKEN 설정 여부 (값은 절대 출력하지 않음 — 설정됨/없음만)
+  - UNSKEIN_WATCH_BUSINESS/PROJECT — watch 대상(미설정 시 전체)
   - UNSKEIN_CRED_DIR 존재 + 어떤 자격증명이 있는지 (.env / id_ed25519 — 값·내용 미출력)
   - UNSKEIN_WORK_ROOT 존재 + 클론된 폴더 목록
   - 서버 도달 (GET $UNSKEIN_API/api/health → status)
+  - watch 대상 검증 + 가용 비즈니스/프로젝트 (GET $UNSKEIN_API/api/mori/scope, 토큰 필요)
 
 읽기 전용 — POST /api/mori/claim 등 작업을 선점·변경하는 호출은 절대 하지 않는다.
-도달 확인은 GET /api/health 만 사용한다.
+GET /api/health(도달) 와 GET /api/mori/scope(대상 확인) 만 사용한다.
 
 stdlib 만 사용 (requests 미설치 환경).
 """
@@ -33,6 +35,8 @@ CRED_DIR = os.getenv(
 WORK_ROOT = os.getenv(
     "UNSKEIN_WORK_ROOT", os.path.expanduser(os.path.join("~", ".unskein", "work"))
 )
+WATCH_BUSINESS = os.getenv("UNSKEIN_WATCH_BUSINESS") or None
+WATCH_PROJECT = os.getenv("UNSKEIN_WATCH_PROJECT") or None
 
 
 def _check_api() -> str:
@@ -46,6 +50,56 @@ def _check_token() -> str:
     if os.getenv("UNSKEIN_MORI_TOKEN"):
         return "[OK] UNSKEIN_MORI_TOKEN: 설정됨"
     return "[없음] UNSKEIN_MORI_TOKEN: 없음 (unskein-connect 로 설정하세요)"
+
+
+def _check_watch() -> str:
+    if not WATCH_BUSINESS and not WATCH_PROJECT:
+        return "[전체] watch 대상: 미지정 (모든 비즈니스/프로젝트)"
+    biz = WATCH_BUSINESS or "(전체 비즈니스)"
+    label = f"{biz} / {WATCH_PROJECT}" if WATCH_PROJECT else biz
+    return f"[OK] watch 대상: {label}"
+
+
+def _check_scope() -> str:
+    # 읽기 전용 — GET /api/mori/scope. 가용 비즈니스/프로젝트 표시 + watch 대상 검증.
+    if not os.getenv("UNSKEIN_MORI_TOKEN"):
+        return "[건너뜀] watch 대상 검증: 토큰 없음 (unskein-connect 먼저)"
+    url = f"{API_BASE}/api/mori/scope"
+    req = urllib.request.Request(
+        url, method="GET", headers={"X-Mori-Token": os.environ["UNSKEIN_MORI_TOKEN"]}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            payload = json.loads(resp.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as exc:
+        return f"[실패] watch 대상 조회: {url} → HTTP {exc.code}"
+    except Exception as exc:  # noqa: BLE001 — 사유를 그대로 보여준다
+        return f"[실패] watch 대상 조회: {url} → {exc}"
+
+    businesses = payload.get("businesses", []) or []
+    if not businesses:
+        return "[경고] 가용 대상 없음 — 이 토큰이 속한 활성 비즈니스가 없습니다"
+    lines = ["[OK] 가용 watch 대상:"]
+    for b in businesses:
+        bname = b.get("name", "")
+        projs = ", ".join(p.get("name", "") for p in (b.get("projects") or [])) or "(프로젝트 없음)"
+        lines.append(f"      - {bname}: {projs}")
+
+    # 지정한 대상이 가용 목록에 있는지 검증.
+    if WATCH_BUSINESS or WATCH_PROJECT:
+        target = businesses
+        if WATCH_BUSINESS:
+            target = [b for b in businesses if b.get("name") == WATCH_BUSINESS]
+            if not target:
+                lines.append(f"      [실패] 지정한 비즈니스 '{WATCH_BUSINESS}' 가 위 목록에 없습니다")
+                return "\n".join(lines)
+        if WATCH_PROJECT:
+            names = [p.get("name") for b in target for p in (b.get("projects") or [])]
+            if WATCH_PROJECT not in names:
+                lines.append(f"      [실패] 지정한 프로젝트 '{WATCH_PROJECT}' 가 위 목록에 없습니다")
+                return "\n".join(lines)
+        lines.append("      [OK] 지정한 watch 대상이 가용 목록과 일치합니다")
+    return "\n".join(lines)
 
 
 def _check_creds() -> str:
@@ -103,9 +157,11 @@ def main() -> int:
     print("=" * 40)
     print(_check_api())
     print(_check_token())
+    print(_check_watch())
     print(_check_creds())
     print(_check_work_root())
     print(_check_health())
+    print(_check_scope())
     print("=" * 40)
     print("토큰 유효성은 첫 /unskein:run 에서 확정됩니다.")
     return 0
