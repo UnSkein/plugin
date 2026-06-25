@@ -84,6 +84,12 @@ def main() -> int:
         )
         return 1
 
+    # 자율 루프 안전 가드 — 범위 미지정 + 원격 서버는 막는다(두 모리 경쟁 사고 방지).
+    block = run_once.autonomous_scope_block()
+    if block:
+        print(f"[loop] 시작 거부 — {block}", flush=True)
+        return 1
+
     # watch 대상 검증 — 잘못 지정했으면 폴링 시작 전에 멈춘다(조용한 전체 폴백 금지).
     ok, label = resolve_watch_scope()
     if not ok:

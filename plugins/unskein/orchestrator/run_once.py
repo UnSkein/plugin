@@ -567,6 +567,31 @@ def preflight() -> tuple[bool, list[str]]:
     return state["ok"], lines
 
 
+def _is_local_api(api: str) -> bool:
+    """API 주소가 로컬(개발) 서버인지 — localhost/127.0.0.1 등."""
+    return any(h in api for h in ("localhost", "127.0.0.1", "0.0.0.0"))
+
+
+def autonomous_scope_block() -> str | None:
+    """자율 루프(watch)를 막아야 하는 위험 조합이면 사유를 돌려준다(아니면 None).
+
+    범위 미지정(WATCH_BUSINESS·WATCH_PROJECT 둘 다 없음) + 원격(테스트/프로덕션) 서버는
+    이 클라이언트가 전체 큐를 무제한 자율 선점(claim)하게 한다. 다오는 항상
+    --dangerously-skip-permissions 로 무인 실행되므로, 여러 클라이언트가 같은 큐를
+    동시에 물면 같은 task 를 두고 경쟁한다(이번 두 모리 사고). 명시 동의
+    (UNSKEIN_ALLOW_UNSCOPED=1) 없이는 막는다 — 범위를 지정해 단독 소유하게 한다.
+    """
+    unscoped = not WATCH_BUSINESS and not WATCH_PROJECT
+    remote = not _is_local_api(API_BASE)
+    if unscoped and remote and os.getenv("UNSKEIN_ALLOW_UNSCOPED") != "1":
+        return (
+            f"범위 미지정(전체 큐) + 원격 서버({API_BASE}) 자율 루프는 막혀 있습니다 — "
+            "여러 클라이언트가 같은 큐를 경쟁하는 사고 방지. bis/prj 로 범위를 "
+            "지정(권장)하거나, 의도적이면 UNSKEIN_ALLOW_UNSCOPED=1 로 명시 동의하세요."
+        )
+    return None
+
+
 def plant_dao_skills(work_root: str) -> None:
     """다오 스킬 원본(dao-skills/)을 work_root 로 복사한다 — 다오 스킬 이식.
 
