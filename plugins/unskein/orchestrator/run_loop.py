@@ -72,6 +72,18 @@ def heartbeat(task_id: int) -> None:
 def main() -> int:
     signal.signal(signal.SIGINT, _on_sigint)
 
+    # preflight — 작업을 잡기 전에 클라이언트 준비 점검(미충족이면 폴링 시작 안 함).
+    ok, lines = run_once.preflight()
+    print("[preflight] 작업 전 준비 점검:", flush=True)
+    for ln in lines:
+        print(ln, flush=True)
+    if not ok:
+        print(
+            "[preflight] 준비 미충족 — 폴링을 시작하지 않고 종료합니다(fallback 금지).",
+            flush=True,
+        )
+        return 1
+
     # watch 대상 검증 — 잘못 지정했으면 폴링 시작 전에 멈춘다(조용한 전체 폴백 금지).
     ok, label = resolve_watch_scope()
     if not ok:
