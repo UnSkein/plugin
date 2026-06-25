@@ -567,6 +567,31 @@ def preflight() -> tuple[bool, list[str]]:
     return state["ok"], lines
 
 
+def _is_local_api(api: str) -> bool:
+    """API 주소가 로컬(개발) 서버인지 — localhost/127.0.0.1 등."""
+    return any(h in api for h in ("localhost", "127.0.0.1", "0.0.0.0"))
+
+
+def autonomous_scope_block() -> str | None:
+    """자율 루프(watch)를 막아야 하는 위험 조합이면 사유를 돌려준다(아니면 None).
+
+    범위 미지정(WATCH_BUSINESS·WATCH_PROJECT 둘 다 없음) + 원격(테스트/프로덕션) 서버는
+    이 클라이언트가 전체 큐를 무제한 자율 선점(claim)하게 한다. 다오는 항상
+    --dangerously-skip-permissions 로 무인 실행되므로, 여러 클라이언트가 같은 큐를
+    동시에 물면 같은 task 를 두고 경쟁한다(이번 두 모리 사고). 명시 동의
+    (UNSKEIN_ALLOW_UNSCOPED=1) 없이는 막는다 — 범위를 지정해 단독 소유하게 한다.
+    """
+    unscoped = not WATCH_BUSINESS and not WATCH_PROJECT
+    remote = not _is_local_api(API_BASE)
+    if unscoped and remote and os.getenv("UNSKEIN_ALLOW_UNSCOPED") != "1":
+        return (
+            f"범위 미지정(전체 큐) + 원격 서버({API_BASE}) 자율 루프는 막혀 있습니다 — "
+            "여러 클라이언트가 같은 큐를 경쟁하는 사고 방지. bis/prj 로 범위를 "
+            "지정(권장)하거나, 의도적이면 UNSKEIN_ALLOW_UNSCOPED=1 로 명시 동의하세요."
+        )
+    return None
+
+
 def plant_dao_skills(work_root: str) -> None:
     """다오 스킬 원본(dao-skills/)을 work_root 로 복사한다 — 다오 스킬 이식.
 
@@ -809,7 +834,9 @@ def _default_branch(repo_path: str, git_env: dict) -> str:
     raise RuntimeError("origin 기본 브랜치를 찾을 수 없습니다 (origin/HEAD·main·master 모두 없음)")
 
 
-def prepare_repo(repo: str, folder: str, status: str, git_env: dict) -> str:
+def prepare_repo(
+    repo: str, folder: str, status: str, git_env: dict, work_root: str | None = None
+) -> str:
     """다오 실행 전, 모리가 repo 를 결정적으로 준비한다. 작업 폴더 경로 반환.
 
     - 폴더가 없으면 clone (credential.helper 빈 값 = 토큰 캐시 저장 차단).
@@ -822,7 +849,7 @@ def prepare_repo(repo: str, folder: str, status: str, git_env: dict) -> str:
     base(이전 브랜치 위) 에서 작업하는 것을 막는다. 실패는 raise 로 드러낸다
     (fallback 금지 — 호출자가 QUESTION 으로 회수).
     """
-    repo_path = os.path.join(WORK_ROOT, folder)
+    repo_path = os.path.join(work_root or WORK_ROOT, folder)
 
     def _git(args: list[str], timeout: int = 300) -> subprocess.CompletedProcess:
         p = subprocess.run(
@@ -875,13 +902,16 @@ def process_task(task: dict) -> int:
         _post(f"/api/mori/tasks/{task_id}/question", {"question": msg})
         return 1
 
-    # 작업 폴더 보장 — 다오 cwd 는 WORK_ROOT, 그 아래 <folder> 를 모리가 준비한다.
-    os.makedirs(WORK_ROOT, exist_ok=True)
+    # 작업 폴더 보장 — 동시 실행 격리를 위해 작업별 폴더(WORK_ROOT/<task_id>)를 쓴다.
+    # 같은 task 의 여러 단계(plan→exec→test→inspect)는 같은 폴더라 작업트리가 이어지고,
+    # 서로 다른 task 는(같은 repo 라도) 폴더가 달라 동시 실행이 충돌하지 않는다.
+    task_root = os.path.join(WORK_ROOT, str(task_id))
+    os.makedirs(task_root, exist_ok=True)
 
-    # 다오 스킬 이식 — WORK_ROOT 에 CLAUDE.md + .claude/skills/ 를 깐다.
+    # 다오 스킬 이식 — task_root 에 CLAUDE.md + .claude/skills/ 를 깐다.
     # 원본 누락은 배포 문제이므로 QUESTION 으로 드러낸다(fallback 금지).
     try:
-        plant_dao_skills(WORK_ROOT)
+        plant_dao_skills(task_root)
     except Exception as e:  # noqa: BLE001 — 누락 사유를 사용자에게 그대로 회수
         msg = str(e)
         print(f"[error] {msg}")
@@ -900,7 +930,9 @@ def process_task(task: dict) -> int:
     # repo 준비 — 모리가 결정적으로 clone/fetch/(plan 이면)기본 브랜치 리셋한다.
     # 이전 작업의 잔여 브랜치 위에서 작업하거나 stale base 로 시작하는 것을 막는다.
     try:
-        prepare_repo(repo, _repo_name(repo), task.get("status") or "", git_env)
+        prepare_repo(
+            repo, _repo_name(repo), task.get("status") or "", git_env, work_root=task_root
+        )
     except Exception as e:  # noqa: BLE001 — 준비 실패 사유를 그대로 회수
         msg = f"repo 준비 실패: {e}"
         print(f"[error] {msg}")
@@ -912,9 +944,9 @@ def process_task(task: dict) -> int:
     print(f"[prompt]\n{prompt}\n")
 
     # 3) 다오 구동
-    print(f"[dao] claude -p 실행 (cwd={WORK_ROOT}, timeout={CLAUDE_TIMEOUT}s) ...")
+    print(f"[dao] claude -p 실행 (cwd={task_root}, timeout={CLAUDE_TIMEOUT}s) ...")
     try:
-        rc, stdout, stderr = run_dao(prompt, WORK_ROOT, git_env)
+        rc, stdout, stderr = run_dao(prompt, task_root, git_env)
     except subprocess.TimeoutExpired:
         msg = f"claude -p timeout ({CLAUDE_TIMEOUT}s 초과)"
         print(f"[error] {msg}")
@@ -937,7 +969,7 @@ def process_task(task: dict) -> int:
     print(f"[dao result]\n{result_text}\n")
 
     kind, status, stage, summary, doc = extract_marker(result_text)
-    transcript = guess_transcript_path(session_id, WORK_ROOT)
+    transcript = guess_transcript_path(session_id, task_root)
 
     # 5) 회수
     if kind == "question":
@@ -966,6 +998,10 @@ def process_task(task: dict) -> int:
         )
         print(f"[report] UNKNOWN → {msg}")
         _post(f"/api/mori/tasks/{task_id}/question", {"question": msg})
+    # 마감(done)된 작업의 격리 폴더는 정리한다 — 작업은 git 으로 push 되어 로컬 클론은
+    # 폐기 가능. done 이 아니면(진행 중 단계) 다음 단계가 작업트리를 이어가야 하므로 보존.
+    if kind == "result" and status == "done":
+        shutil.rmtree(task_root, ignore_errors=True)
     print("[done] 한 바퀴 완료.")
     return 0
 
