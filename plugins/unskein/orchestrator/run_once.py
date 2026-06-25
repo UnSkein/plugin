@@ -672,6 +672,33 @@ def build_prompt(task: dict) -> str:
         if result_doc:
             prior = f"\n검증 결과:\n{result_doc}\n"
 
+    # ADR-0007 rule 2 — 서브트리 주입. 이 작업이 WBS 상위 노드면(자손 있음) 자손
+    # 내용을 함께 실어, 다오가 서브트리 전체를 한 단위로 개발하고 한 브랜치/PR 로
+    # 마감하게 한다(자손 없으면 빈 블록).
+    subtree = task.get("subtree") or []
+    subtree_block = ""
+    if subtree:
+        sb = [
+            "\n이 작업은 WBS 상위 노드다 — 아래 자손까지 한 단위로 함께 개발하고 "
+            "한 브랜치/PR 로 마감하라(서브트리 실행). 수용 기준·구현·검증이 자손 내용을 "
+            "포괄해야 한다:"
+        ]
+        for n in subtree:
+            code = n.get("wbs_code")
+            head = f"- [{code}] {n.get('title', '')}" if code else f"- {n.get('title', '')}"
+            st = n.get("status")
+            if st:
+                head += f" (status={st})"
+            sb.append(head)
+            desc = n.get("description")
+            if desc:
+                sb.append(f"    설명: {desc}")
+            pdoc = n.get("plan_doc")
+            if pdoc:
+                sb.append("    계획:")
+                sb.extend(f"      {pl}" for pl in pdoc.splitlines())
+        subtree_block = "\n".join(sb) + "\n"
+
     return (
         header
         + f"대상 repo: {repo}\n"
@@ -686,6 +713,7 @@ def build_prompt(task: dict) -> str:
         + stage_line
         + "\n"
         + prior
+        + subtree_block
         + "\n현재 단계만 수행하고 다음 status 로 보고하라. "
         + "전체 단계 순서를 한 번에 밟지 않는다 — 다음 단계는 모리가 다음에 다시 선점한다.\n"
         + "완료 보고는 CLAUDE.md 4.1 출력 규약을 따른다 — "
