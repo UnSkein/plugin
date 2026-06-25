@@ -18,7 +18,7 @@
 | `plan` | 범위 (`unskein-scope`) | 앞: `unskein-wiki-search` (재분석 방지) | `plan_doc` (수용 기준) | `exec` |
 | `exec` | 구현 (`unskein-exec`) | — | 없음 | `test` |
 | `test` | 검증 (`unskein-verify`) | — | `result_doc` (검증 결과) + `docs/raw/` 기록 | `inspect` |
-| `inspect` | 마감 (`unskein-deploy`) | 앞: `unskein-wiki-ingest` + `unskein-wiki-lint` | `close_doc` (변경 요약·배포 결과) | `done` |
+| `inspect` | 마감 (`unskein-git`) | 앞: `unskein-wiki-ingest` + `unskein-wiki-lint` | `close_doc` (변경 요약·PR 링크) | `done` |
 
 - 보조 단계는 그 단계 안에서 함께 수행하되 **자체 status 전이를 만들지 않는다.** `wiki-search`는 `plan` 안에서, `wiki-ingest`·`wiki-lint`는 `inspect` 안에서 수행한다.
 - `wiki-ingest`·`wiki-lint`의 산출물은 repo 커밋(`docs/architecture`·`docs/decisions`)으로만 남긴다. DB 본문 컬럼에는 저장하지 않는다.
@@ -39,12 +39,12 @@ UNSKEIN_DOC
 
 - 첫 줄은 `RESULT:` 로 시작한다 (콜론 직후 공백 1칸). 공백 구분 `key=value` 메타 순서: `status`, `stage`, `summary`.
   - `status` — 보고하는 next status (위 표의 "보고 next status"). **누락 금지** — 누락이면 모리가 마커 미규약으로 보고 회수한다 (추측 금지).
-  - `stage` — 방금 수행한 단계명: `scope`(plan) / `exec` / `verify`(test) / `deploy`(inspect).
+  - `stage` — 방금 수행한 단계명: `scope`(plan) / `exec` / `verify`(test) / `close`(inspect).
   - `summary` — 한 줄 요약. `summary=` 이후 그 줄 끝까지 전부가 값이다 (마지막 key라 공백 허용).
 - 본문 산출물이 있으면 여는 토큰 `<<<UNSKEIN_DOC`(줄 전체) 다음 줄부터 닫는 토큰 `UNSKEIN_DOC`(줄 전체)까지에 markdown으로 담는다.
   - `scope`는 수용 기준을 본문에 담는다 (모리가 `plan_doc`에 저장).
   - `verify`는 검증 결과를 본문에 담는다 (모리가 `result_doc`에 저장).
-  - `deploy`는 변경 요약·배포 결과를 본문에 담는다 (모리가 `close_doc`에 저장).
+  - `close`(마감, `unskein-git`)는 변경 요약·PR 링크를 본문에 담는다 (모리가 `close_doc`에 저장). 배포는 머지 후 자동(서버) — dao 보고에 배포 결과는 없다.
   - `exec`는 산출 본문이 없다 — 펜스 블록을 생략하고 첫 줄만 낸다.
 
 `scope` 단계 예시:
