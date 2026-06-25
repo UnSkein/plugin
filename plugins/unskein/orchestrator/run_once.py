@@ -486,6 +486,87 @@ def resolve_watch_scope() -> tuple[bool, str]:
     return True, watch_label()
 
 
+def _git_behind(repo_dir: str) -> int | None:
+    """repo_dir 의 현재 브랜치가 upstream 보다 몇 커밋 뒤졌는지. 못 구하면 None."""
+    try:
+        subprocess.run(
+            ["git", "-C", repo_dir, "fetch", "--quiet"],
+            capture_output=True, timeout=30, check=True,
+        )
+        out = subprocess.run(
+            ["git", "-C", repo_dir, "rev-list", "--count", "HEAD..@{upstream}"],
+            capture_output=True, text=True, timeout=15, check=True,
+        )
+        return int(out.stdout.strip() or "0")
+    except Exception:  # noqa: BLE001 — 업데이트 점검은 best-effort(실패해도 차단 안 함).
+        return None
+
+
+def preflight() -> tuple[bool, list[str]]:
+    """작업을 잡기(claim) 전에 이 클라이언트가 일할 준비가 됐는지 점검한다.
+
+    준비가 안 됐는데 작업을 잡으면, 잡은 뒤 단계(plant_dao_skills 등)에서 실패해
+    프로덕션 task 가 question 으로 튕겨 큐를 오염시킨다(설계 사고). 그래서 잡기 전에
+    여기서 막는다(fallback 금지 — 치명 항목 미충족이면 시작하지 않는다).
+
+    점검(치명): 실행 환경(다오·git 바이너리가 잡히면 WSL 등 환경이 떠 있는 것)·
+    다오 스킬 원본·자격증명 폴더·작업 루트·큐 서버 도달. (경고): 플러그인 업데이트.
+    repo pull 여부는 작업마다 prepare_repo 가 clone+fetch+reset 으로 보장하므로
+    여기서 점검하지 않는다(작업 전엔 repo 미상).
+
+    반환 (ok, lines). ok=False 면 치명 항목 미충족 → 호출측이 선점 전에 멈춘다.
+    """
+    lines: list[str] = []
+    state = {"ok": True}
+
+    def check(label: str, passed: bool, detail: str = "", critical: bool = True) -> None:
+        mark = "OK" if passed else ("실패" if critical else "경고")
+        # detail(원인·조치 힌트)은 실패/경고일 때만 — 통과 줄에 붙으면 오해를 준다.
+        suffix = "" if passed else (f" — {detail}" if detail else "")
+        lines.append(f"  [{mark}] {label}{suffix}")
+        if not passed and critical:
+            state["ok"] = False
+
+    # 1) 실행 환경 작동 — 다오·git 바이너리(잡히면 실행 환경이 떠 있는 것).
+    check("다오 CLI(claude) 존재", shutil.which("claude") is not None,
+          "PATH 에 claude 없음 — 다오를 못 띄운다")
+    check("git 존재", shutil.which("git") is not None, "PATH 에 git 없음")
+
+    # 2) 필요한 것 — 다오 스킬 원본 / 자격증명 폴더 / 작업 루트.
+    check("다오 스킬 원본(dao-skills)", os.path.isdir(DAO_SKILLS_SRC),
+          f"{DAO_SKILLS_SRC} 없음 — plugin 설치 또는 UNSKEIN_DAO_SKILLS 확인")
+    check("자격증명 폴더(creds)", os.path.isdir(CRED_DIR),
+          f"{CRED_DIR} 없음 — unskein-add-site 로 자격증명 배치")
+    try:
+        os.makedirs(WORK_ROOT, exist_ok=True)
+        work_ok = os.path.isdir(WORK_ROOT)
+    except OSError:
+        work_ok = False
+    check("작업 루트(work)", work_ok, f"{WORK_ROOT} 생성 불가")
+
+    # 3) 큐 서버 도달 — '필요한 것이 작동'에 서버 포함.
+    try:
+        h = _get("/api/health")
+        server_ok = isinstance(h, dict) and h.get("status") == "ok"
+        check(f"큐 서버 도달({API_BASE})", server_ok, "" if server_ok else "health 비정상")
+    except Exception as exc:  # noqa: BLE001
+        check(f"큐 서버 도달({API_BASE})", False, str(exc))
+
+    # 4) 업데이트 — 플러그인 새 버전(경고만, 차단 안 함). 플러그인이 git 설치일 때만.
+    plugin_root = os.getenv("CLAUDE_PLUGIN_ROOT")
+    if plugin_root and os.path.isdir(os.path.join(plugin_root, ".git")):
+        behind = _git_behind(plugin_root)
+        if behind is None:
+            check("플러그인 업데이트 확인", True, "원격 조회 실패 — 건너뜀", critical=False)
+        elif behind > 0:
+            check("플러그인 최신 여부", False,
+                  f"원격이 {behind} 커밋 앞섬 — /plugin 갱신 권장", critical=False)
+        else:
+            check("플러그인 최신 여부", True)
+
+    return state["ok"], lines
+
+
 def plant_dao_skills(work_root: str) -> None:
     """다오 스킬 원본(dao-skills/)을 work_root 로 복사한다 — 다오 스킬 이식.
 
@@ -899,6 +980,15 @@ def main() -> int:
         print(f"[watch] {label}")
         return 1
     print(f"[watch] 대상: {label}")
+
+    # preflight — 작업을 잡기 전에 클라이언트 준비 점검(미충족이면 선점 안 함).
+    ok, lines = preflight()
+    print("[preflight] 작업 전 준비 점검:")
+    for ln in lines:
+        print(ln)
+    if not ok:
+        print("[preflight] 준비 미충족 — 작업을 선점하지 않고 종료(fallback 금지).")
+        return 1
 
     # 1) claim (watch 대상 필터를 실어 보낸다)
     claim = _post("/api/mori/claim", _claim_body())
