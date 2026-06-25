@@ -570,11 +570,13 @@ def build_prompt(task: dict) -> str:
         header
         + f"대상 repo: {repo}\n"
         + f"작업 폴더 이름: {folder}\n\n"
-        + f"현재 디렉토리에 '{folder}' 가 없으면 "
-        + f"'git -c credential.helper= clone {repo} {folder}' 로 클론하라"
-        + "(credential.helper 빈 값 = 토큰 캐시 저장 차단). "
-        + f"이미 있으면 그 안에서 git pull 하라.\n"
-        + f"'{folder}' 안으로 들어가 작업을 수행하라.\n"
+        + f"모리가 '{folder}' 를 미리 클론·최신화해 두었다"
+        + (
+            " (기본 브랜치 최신 상태에서 시작 — 직접 clone/pull/checkout 하지 말 것)."
+            if status == "plan"
+            else " (이전 단계 작업 트리 유지 — 직접 clone/pull/reset 하지 말 것)."
+        )
+        + f" '{folder}' 안으로 들어가 작업을 수행하라.\n"
         + stage_line
         + "\n"
         + prior
@@ -708,6 +710,69 @@ def guess_transcript_path(session_id: str | None, cwd: str) -> str | None:
     return os.path.expanduser(f"~/.claude/projects/{slug}/{session_id}.jsonl")
 
 
+def _default_branch(repo_path: str, git_env: dict) -> str:
+    """origin 의 기본 브랜치명(master/main 등). origin/HEAD → 없으면 차선 탐색."""
+    p = subprocess.run(
+        ["git", "-C", repo_path, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+        capture_output=True, text=True, env=git_env, timeout=60,
+    )
+    if p.returncode == 0 and p.stdout.strip():
+        return p.stdout.strip().split("/", 1)[-1]  # 'origin/master' → 'master'
+    for cand in ("main", "master"):
+        chk = subprocess.run(
+            ["git", "-C", repo_path, "ls-remote", "--exit-code", "--heads", "origin", cand],
+            capture_output=True, text=True, env=git_env, timeout=60,
+        )
+        if chk.returncode == 0:
+            return cand
+    raise RuntimeError("origin 기본 브랜치를 찾을 수 없습니다 (origin/HEAD·main·master 모두 없음)")
+
+
+def prepare_repo(repo: str, folder: str, status: str, git_env: dict) -> str:
+    """다오 실행 전, 모리가 repo 를 결정적으로 준비한다. 작업 폴더 경로 반환.
+
+    - 폴더가 없으면 clone (credential.helper 빈 값 = 토큰 캐시 저장 차단).
+    - origin fetch 로 최신 반영.
+    - 작업 시작(status=='plan')이면 기본 브랜치로 깨끗하게 리셋한다 — 이전 작업의
+      잔여 feature 브랜치·미커밋을 제거하고 **항상 최신 master/main 에서 출발**.
+    - 진행 중 단계(exec/test/inspect/answered)는 작업 트리를 보존한다(리셋 금지).
+
+    pull 을 다오 프롬프트 지시에 맡기지 않고 모리가 결정적으로 수행한다 — stale
+    base(이전 브랜치 위) 에서 작업하는 것을 막는다. 실패는 raise 로 드러낸다
+    (fallback 금지 — 호출자가 QUESTION 으로 회수).
+    """
+    repo_path = os.path.join(WORK_ROOT, folder)
+
+    def _git(args: list[str], timeout: int = 300) -> subprocess.CompletedProcess:
+        p = subprocess.run(
+            ["git", "-C", repo_path, *args],
+            capture_output=True, text=True, env=git_env, timeout=timeout,
+        )
+        if p.returncode != 0:
+            raise RuntimeError(f"git {' '.join(args)} 실패: {p.stderr.strip()[:300]}")
+        return p
+
+    if not os.path.isdir(os.path.join(repo_path, ".git")):
+        p = subprocess.run(
+            ["git", "-c", "credential.helper=", "clone", repo, repo_path],
+            capture_output=True, text=True, env=git_env, timeout=CLAUDE_TIMEOUT,
+        )
+        if p.returncode != 0:
+            raise RuntimeError(f"git clone 실패: {p.stderr.strip()[:300]}")
+
+    _git(["fetch", "--prune", "origin"])
+    default = _default_branch(repo_path, git_env)
+    if status == "plan":
+        # 작업 시작 — 최신 기본 브랜치에서 깨끗하게 출발(잔여 브랜치/미커밋 제거).
+        _git(["checkout", "-f", default])
+        _git(["reset", "--hard", f"origin/{default}"])
+        _git(["clean", "-fd"])
+        print(f"[repo] '{folder}' {default} 최신으로 리셋 (작업 시작)")
+    else:
+        print(f"[repo] '{folder}' 작업 트리 보존 (진행 중 단계={status})")
+    return repo_path
+
+
 def process_task(task: dict) -> int:
     """선점한 작업 1건을 다오로 처리하고 report/question 으로 회수한다.
 
@@ -729,7 +794,7 @@ def process_task(task: dict) -> int:
         _post(f"/api/mori/tasks/{task_id}/question", {"question": msg})
         return 1
 
-    # 작업 폴더 보장 — 클론은 다오가 prompt 지시로 수행하므로 cwd 는 존재하는 WORK_ROOT.
+    # 작업 폴더 보장 — 다오 cwd 는 WORK_ROOT, 그 아래 <folder> 를 모리가 준비한다.
     os.makedirs(WORK_ROOT, exist_ok=True)
 
     # 다오 스킬 이식 — WORK_ROOT 에 CLAUDE.md + .claude/skills/ 를 깐다.
@@ -747,6 +812,16 @@ def process_task(task: dict) -> int:
         git_env = build_git_env(repo)
     except Exception as e:  # noqa: BLE001 — 누락 사유를 사용자에게 그대로 회수
         msg = str(e)
+        print(f"[error] {msg}")
+        _post(f"/api/mori/tasks/{task_id}/question", {"question": msg})
+        return 1
+
+    # repo 준비 — 모리가 결정적으로 clone/fetch/(plan 이면)기본 브랜치 리셋한다.
+    # 이전 작업의 잔여 브랜치 위에서 작업하거나 stale base 로 시작하는 것을 막는다.
+    try:
+        prepare_repo(repo, _repo_name(repo), task.get("status") or "", git_env)
+    except Exception as e:  # noqa: BLE001 — 준비 실패 사유를 그대로 회수
+        msg = f"repo 준비 실패: {e}"
         print(f"[error] {msg}")
         _post(f"/api/mori/tasks/{task_id}/question", {"question": msg})
         return 1
