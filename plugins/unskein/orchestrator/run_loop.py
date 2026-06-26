@@ -99,6 +99,9 @@ def main() -> int:
         flush=True,
     )
 
+    # 버려진 작업폴더 GC(F) — 폴링 시작 전에 한 번(run_once 의 gc_work_root 미러 사용).
+    run_once.gc_work_root()
+
     tick = 0
     empty_streak = 0
     processed = 0
