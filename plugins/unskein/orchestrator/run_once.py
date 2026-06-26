@@ -12,6 +12,7 @@
 stdlib 만 사용 (requests 미설치 환경). 단순 1패스 — 큐 루프/재시도 없음.
 """
 
+import http.client
 import json
 import os
 import re
@@ -19,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 
@@ -40,6 +42,13 @@ CLAUDE_TIMEOUT = int(os.getenv("UNSKEIN_CLAUDE_TIMEOUT", "600"))
 # 작업별 heartbeat 주기(초). process_task 가 단일패스·동시 풀 양쪽에서 이 주기로 찍어,
 # 한 턴이 서버 lease(CLAIM_STALE) 를 넘겨도 다른 워커가 같은 작업을 이중선점하지 못하게 한다.
 HEARTBEAT_INTERVAL = int(os.getenv("UNSKEIN_HEARTBEAT_INTERVAL", "60"))
+# 실패 복구(F) — RESULT report 전송 재시도. 5xx·네트워크만 지수 백오프(4xx 는 계약/상태
+# 위반 — 인접성 400·펜스 409 등 — 이라 재시도해도 같으니 영구 실패). 소진/4xx 면 호출자가
+# status 를 유지한 채 종료해 재선점이 단계를 재실행한다(session 없는 question 전환 금지).
+REPORT_RETRIES = int(os.getenv("UNSKEIN_REPORT_RETRIES", "4"))
+REPORT_BACKOFF_BASE = float(os.getenv("UNSKEIN_REPORT_BACKOFF", "1.0"))
+# 버려진 작업폴더 GC 유예(초) — 갓 선점/전이 중인 폴더를 age 단독으로 지우지 않게.
+GC_GRACE_SECONDS = int(os.getenv("UNSKEIN_GC_GRACE", "3600"))
 
 # watch 대상 — 이 클라이언트가 바라볼 프로덕션 작업의 범위를 좁힌다(이름으로 지정).
 # 둘 다 비우면 토큰 사용자의 모든 비즈니스/프로젝트가 대상(기존 동작).
@@ -434,6 +443,70 @@ def _get(path: str) -> dict:
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def _post_report(task_id: int, body: dict) -> bool:
+    """RESULT report 전송(F) — 일시 실패(5xx·네트워크)는 지수 백오프로 재시도하고, 4xx(인접성
+    400·펜스 409 등 계약/상태 위반)는 재시도 없이 영구 실패로 본다. 성공 True / 영구 실패 False.
+
+    영구 실패를 session 없는 question 으로 바꾸지 않는다(성공턴·전이·doc 폐기 방지 — fallback
+    금지). 호출자는 False 면 status 를 유지한 채 return 1 하여, 재선점이 같은 단계를 재실행하게 한다.
+    """
+    path = f"/api/mori/tasks/{task_id}/report"
+    last = ""
+    for attempt in range(REPORT_RETRIES + 1):
+        try:
+            _post(path, body)
+            return True
+        except urllib.error.HTTPError as exc:
+            if 400 <= exc.code < 500:
+                detail = exc.read().decode("utf-8", "replace")[:500]
+                print(f"[report] 영구 실패 {exc.code} (재시도 안 함): {detail}")
+                return False
+            last = f"HTTP {exc.code}"
+        except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
+            # 연결 단계(URLError)뿐 아니라 응답 수신 단계 실패도 재시도 대상으로 잡는다 —
+            # read timeout(TimeoutError)·연결 리셋(ConnectionResetError, 예: 배포 재시작 중
+            # in-flight POST)·잘린 본문(http.client.IncompleteRead). 이들은 URLError 가 아니라
+            # 그냥 두면 _post_report 를 빠져나가 run_loop 가 session 없는 question 으로 바꾼다
+            # (성공턴 폐기 — F 가 막으려는 바로 그 fallback). URLError 는 OSError 하위지만 명시.
+            last = f"network {type(exc).__name__}: {exc}"
+        if attempt < REPORT_RETRIES:
+            delay = REPORT_BACKOFF_BASE * (2 ** attempt)
+            print(
+                f"[report] 일시 실패({last}) — {delay:.1f}s 후 재시도 "
+                f"{attempt + 1}/{REPORT_RETRIES}"
+            )
+            time.sleep(delay)
+    print(f"[report] 재시도 소진({last}) — 영구 실패로 처리(status 유지).")
+    return False
+
+
+def gc_work_root() -> None:
+    """버려진 작업 폴더 정리(F) — 서버 live(status != done) 집합에 없고 mtime 이 grace 를 넘긴
+    WORK_ROOT/<task_id> 만 지운다. 진행 중·재개 가능(waiting/answered) 트리와 갓 선점된 폴더는
+    live 집합 또는 grace 가 보호한다(age 단독 삭제 금지 — ADR-0008 resume·ADR-0009 재진입 보존).
+    live 조회 실패·개별 폴더 오류는 무시한다(정리가 작업을 막지 않게)."""
+    if not os.path.isdir(WORK_ROOT):
+        return
+    try:
+        live = {str(i) for i in _get("/api/mori/live-task-ids").get("ids", [])}
+    except Exception as exc:  # noqa: BLE001 — GC 는 best-effort, 실패해도 작업은 진행.
+        print(f"[gc] live 집합 조회 실패 — 정리 건너뜀: {exc}")
+        return
+    now = time.time()
+    for name in os.listdir(WORK_ROOT):
+        path = os.path.join(WORK_ROOT, name)
+        if not os.path.isdir(path) or name in live:
+            continue  # live(진행 중/재개 가능) 트리는 보존
+        try:
+            age = now - os.path.getmtime(path)
+        except OSError:
+            continue
+        if age < GC_GRACE_SECONDS:
+            continue  # grace 내 — 갓 선점/전이 중일 수 있어 보존
+        print(f"[gc] 버려진 작업폴더 정리: {name} (age {age / 3600:.1f}h)")
+        shutil.rmtree(path, ignore_errors=True)
 
 
 def _claim_body() -> dict:
@@ -1097,10 +1170,12 @@ def _process_task(task: dict) -> int:
     session_id, result_text, err = parse_result(stdout)
     if err:
         print(f"[error] {err}\n[raw stdout head]\n{stdout[:2000]}")
-        _post(
-            f"/api/mori/tasks/{task_id}/question",
-            {"question": f"다오 실행 실패: {err}"},
-        )
+        # 세션이 파싱됐으면 함께 보내 답변 후 --resume 으로 이어받게 한다(F). 없으면 None(이어받을
+        # 세션 없음을 명시 — fallback 금지). 직전엔 session_id 를 빠뜨려 resume 를 폐기했다.
+        q = {"question": f"다오 실행 실패: {err}"}
+        if session_id:
+            q["session_id"] = session_id
+        _post(f"/api/mori/tasks/{task_id}/question", q)
         return 1
     print(f"[dao] session_id={session_id}")
     print(f"[dao result]\n{result_text}\n")
@@ -1121,8 +1196,8 @@ def _process_task(task: dict) -> int:
     elif kind == "result":
         # 단계 전이는 오직 마커의 next status 로만 일어난다(하드코딩 done 금지).
         print(f"[report] RESULT → status={status} stage={stage} summary={summary}")
-        _post(
-            f"/api/mori/tasks/{task_id}/report",
+        ok = _post_report(
+            task_id,
             {
                 "summary": summary,
                 "session_id": session_id,
@@ -1132,6 +1207,11 @@ def _process_task(task: dict) -> int:
                 "doc": doc,
             },
         )
+        if not ok:
+            # 보고 영구 실패(F) — 서버 status 는 안 바뀌었다. session 없는 question 으로 바꾸지
+            # 않고(성공턴·전이·doc 폐기 방지), status 유지 채 종료해 재선점이 이 단계를 재실행한다.
+            print("[report] 보고 실패 — status 유지, 재선점이 단계를 재실행한다.")
+            return 1
     else:
         # 마커/status 누락 → 자동 done 금지. 규약대로 보고하지 않았음을 QUESTION 으로 드러낸다(fallback 금지).
         msg = (
@@ -1173,6 +1253,9 @@ def main() -> int:
     if not ok:
         print("[preflight] 준비 미충족 — 작업을 선점하지 않고 종료(fallback 금지).")
         return 1
+
+    # 버려진 작업폴더 GC(F) — 죽은 턴/마감 작업의 클론 누적을 막는다. 선점 전에 한 번.
+    gc_work_root()
 
     # 1) claim (watch 대상 필터를 실어 보낸다)
     claim = _post("/api/mori/claim", _claim_body())
