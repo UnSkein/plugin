@@ -18,6 +18,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import urllib.error
 import urllib.request
 
@@ -36,6 +37,9 @@ if not MORI_TOKEN:
     sys.exit(1)
 # claude -p 가 오래 걸릴 수 있어 넉넉히.
 CLAUDE_TIMEOUT = int(os.getenv("UNSKEIN_CLAUDE_TIMEOUT", "600"))
+# 작업별 heartbeat 주기(초). process_task 가 단일패스·동시 풀 양쪽에서 이 주기로 찍어,
+# 한 턴이 서버 lease(CLAIM_STALE) 를 넘겨도 다른 워커가 같은 작업을 이중선점하지 못하게 한다.
+HEARTBEAT_INTERVAL = int(os.getenv("UNSKEIN_HEARTBEAT_INTERVAL", "60"))
 
 # watch 대상 — 이 클라이언트가 바라볼 프로덕션 작업의 범위를 좁힌다(이름으로 지정).
 # 둘 다 비우면 토큰 사용자의 모든 비즈니스/프로젝트가 대상(기존 동작).
@@ -621,10 +625,15 @@ def plant_dao_skills(work_root: str) -> None:
 # status → (이번에 수행할 단계 지시, 보고할 next status). claim 한 status 가
 # 이번 단계를 정한다 — 다오는 그 단계만 수행하고 next status 로 보고한다(단계 분할).
 STAGE_INSTRUCTIONS = {
+    # plan = 첫 구현 단계(스콥 게이트 — ADR-0009). 사람이 attach_plan 으로 수용 기준을
+    # 확정해 실행대기로 올린 작업이라, 다오는 스콥을 다시 하지 않고 곧장 구현한다.
     "plan": (
-        "이번 단계: 범위. 먼저 unskein-wiki-search 로 기존 지식을 찾고, "
-        "unskein-scope 로 작업을 검증 가능한 수용 기준으로 정리하라."
+        "이번 단계: 구현. 먼저 unskein-wiki-search 로 기존 지식을 확인하고, "
+        "unskein-exec 로 주입된 구현 사양(수용 기준)을 최소·수술적으로 구현하라. "
+        "이 단계에서는 커밋·push 하지 않는다(마감 단계에서만)."
     ),
+    # exec 는 은퇴된 레거시 단계 — 이미 exec 로 들어간 작업의 드레인용으로만 남긴다
+    # (새 작업은 plan 에서 구현 후 곧장 test 로 보고한다 — dao-skills/CLAUDE.md 단계 표).
     "exec": (
         "이번 단계: 구현. unskein-exec 로 정해진 범위를 최소·수술적으로 구현하라. "
         "이 단계에서는 커밋·push 하지 않는다(마감 단계에서만)."
@@ -664,10 +673,12 @@ def build_prompt(task: dict) -> str:
 
     # 이전 단계 저장본을 프롬프트에 주입(있을 때만 — 빈값 강제 금지).
     prior = ""
-    if status == "exec":
+    if status in ("plan", "exec"):
+        # plan = 첫 구현 단계(스콥 게이트 — ADR-0009). plan_doc 은 직전 단계 산출물이
+        # 아니라 사람이 attach_plan 으로 붙인 구현 사양(수용 기준)이다. exec 는 레거시.
         plan_doc = task.get("plan_doc")
         if plan_doc:
-            prior = f"\n이전 단계 계획:\n{plan_doc}\n"
+            prior = f"\n구현 사양(수용 기준):\n{plan_doc}\n"
     elif status == "inspect":
         result_doc = task.get("result_doc")
         if result_doc:
@@ -897,9 +908,10 @@ def prepare_repo(
 
     - 폴더가 없으면 clone (credential.helper 빈 값 = 토큰 캐시 저장 차단).
     - origin fetch 로 최신 반영.
-    - 작업 시작(status=='plan')이면 기본 브랜치로 깨끗하게 리셋한다 — 이전 작업의
-      잔여 feature 브랜치·미커밋을 제거하고 **항상 최신 master/main 에서 출발**.
-    - 진행 중 단계(exec/test/inspect/answered)는 작업 트리를 보존한다(리셋 금지).
+    - 첫 클론(폴더 신규)이면 기본 브랜치로 깨끗하게 리셋한다 — 최신 master/main 에서 출발.
+    - 폴더가 이미 있으면(같은 task 의 다음 단계·재선점·answered) 작업 트리를 보존한다
+      (리셋 금지). plan 이 첫 구현 단계가 된 뒤로는(ADR-0009) plan 재진입에서 리셋하면
+      진행 중 구현이 영구 삭제되므로, 존재하는 폴더는 status 무관 보존한다.
 
     pull 을 다오 프롬프트 지시에 맡기지 않고 모리가 결정적으로 수행한다 — stale
     base(이전 브랜치 위) 에서 작업하는 것을 막는다. 실패는 raise 로 드러낸다
@@ -916,7 +928,8 @@ def prepare_repo(
             raise RuntimeError(f"git {' '.join(args)} 실패: {p.stderr.strip()[:300]}")
         return p
 
-    if not os.path.isdir(os.path.join(repo_path, ".git")):
+    fresh_clone = not os.path.isdir(os.path.join(repo_path, ".git"))
+    if fresh_clone:
         p = subprocess.run(
             ["git", "-c", "credential.helper=", "clone", repo, repo_path],
             capture_output=True, text=True, env=git_env, timeout=CLAUDE_TIMEOUT,
@@ -926,18 +939,48 @@ def prepare_repo(
 
     _git(["fetch", "--prune", "origin"])
     default = _default_branch(repo_path, git_env)
-    if status == "plan":
-        # 작업 시작 — 최신 기본 브랜치에서 깨끗하게 출발(잔여 브랜치/미커밋 제거).
+    if fresh_clone:
+        # 첫 클론 — 최신 기본 브랜치에서 깨끗하게 출발(잔여 없음 보장).
         _git(["checkout", "-f", default])
         _git(["reset", "--hard", f"origin/{default}"])
         _git(["clean", "-fd"])
-        print(f"[repo] '{folder}' {default} 최신으로 리셋 (작업 시작)")
+        print(f"[repo] '{folder}' {default} 최신으로 클론·리셋 (작업 시작)")
     else:
-        print(f"[repo] '{folder}' 작업 트리 보존 (진행 중 단계={status})")
+        # 재진입(같은 task 의 다음 단계·재선점·answered) — 작업 트리 보존. plan 이 첫
+        # 구현 단계가 된 뒤로는 plan 재진입에서 리셋하면 진행 중 구현이 영구 삭제되므로,
+        # 폴더가 있으면 status 무관 보존한다(ADR-0009 · 데이터 손실 방지).
+        print(f"[repo] '{folder}' 작업 트리 보존 (재진입, status={status})")
     return repo_path
 
 
 def process_task(task: dict) -> int:
+    """선점한 작업을 heartbeat 를 찍으며 처리한다 — 단일패스(run_once)·동시 풀(run_loop) 공용.
+
+    claim~report 한 턴이 서버 lease(CLAIM_STALE) 를 넘겨도 다른 워커가 같은 task_root 를
+    이중선점하지 못하게, task_id 확보 직후 heartbeat 스레드를 띄운다(시작 직후 1회 + 이후
+    HEARTBEAT_INTERVAL 마다). 처리가 끝나면 멈춘다. heartbeat 실패는 무시한다(처리를 막지 않게).
+    """
+    task_id = task["id"]
+    stop = threading.Event()
+
+    def _beat() -> None:
+        while True:
+            try:
+                _post(f"/api/mori/tasks/{task_id}/heartbeat")
+            except Exception:  # noqa: BLE001 — heartbeat 실패가 처리를 막지 않게.
+                pass
+            if stop.wait(HEARTBEAT_INTERVAL):
+                return
+
+    beat = threading.Thread(target=_beat, daemon=True)
+    beat.start()
+    try:
+        return _process_task(task)
+    finally:
+        stop.set()
+
+
+def _process_task(task: dict) -> int:
     """선점한 작업 1건을 다오로 처리하고 report/question 으로 회수한다.
 
     반환값은 종료 코드 의미 (0=성공, 1=실패). 호출자가 task 를 이미 claim 한 상태.
@@ -1021,6 +1064,18 @@ def process_task(task: dict) -> int:
             return 1
         prompt = build_resume_prompt(answer)
     else:
+        # 스콥 게이트 런타임 백스톱(ADR-0009) — plan(첫 구현 단계)인데 구현 사양(plan_doc)이
+        # 비어 있으면 서버 게이트(attach_plan/update_task)를 못 지난 레거시/이상 작업이다.
+        # 빈 사양으로 blind 구현하지 않고 QUESTION 으로 회수한다(fallback 금지).
+        if claim_status == "plan" and not (task.get("plan_doc") or "").strip():
+            msg = (
+                "실행대기(plan) 작업에 구현 사양(plan_doc)이 비어 있습니다 — 스콥 없이 "
+                "구현할 수 없습니다. 작업 패널에서 계획(수용 기준)을 첨부한 뒤 다시 "
+                "실행대기로 올리세요."
+            )
+            print(f"[error] {msg}")
+            _post(f"/api/mori/tasks/{task_id}/question", {"question": msg})
+            return 1
         prompt = build_prompt(task)
     print(f"[prompt]\n{prompt}\n")
 
