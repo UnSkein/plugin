@@ -24,7 +24,6 @@ stdlib 만 사용.
 import os
 import signal
 import sys
-import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
@@ -51,7 +50,6 @@ apply_watch_args(_wb, _wp)
 INTERVAL = int(os.getenv("UNSKEIN_LOOP_INTERVAL", "30"))
 MAX_EMPTY = int(os.getenv("UNSKEIN_LOOP_MAX_EMPTY", "0"))
 MAX_CONCURRENCY = max(1, int(os.getenv("UNSKEIN_MAX_CONCURRENCY", "3")))
-HEARTBEAT_INTERVAL = int(os.getenv("UNSKEIN_HEARTBEAT_INTERVAL", "60"))
 
 # 위치 인자: run_loop.py [INTERVAL] [MAX_EMPTY] (watch 키워드 제외 후)
 if len(_positionals) >= 1:
@@ -66,32 +64,6 @@ def _on_sigint(signum, frame):
     global _STOP
     _STOP = True
     print("\n[loop] SIGINT 수신 — 새 선점을 멈추고 진행 중 작업 완료 후 종료합니다.", flush=True)
-
-
-def _process_with_heartbeat(task: dict) -> int:
-    """작업을 처리하면서 주기적으로 heartbeat 를 찍는다(동시·장시간 실행 대비).
-
-    풀 워커 스레드에서 돈다. heartbeat 스레드가 시작 직후 1회 + 이후
-    HEARTBEAT_INTERVAL 마다 찍고, 작업이 끝나면 멈춘다. heartbeat 실패는 무시한다.
-    """
-    task_id = task["id"]
-    stop = threading.Event()
-
-    def _beat() -> None:
-        while True:
-            try:
-                _post(f"/api/mori/tasks/{task_id}/heartbeat")
-            except Exception:  # noqa: BLE001 — heartbeat 실패가 처리를 막지 않게.
-                pass
-            if stop.wait(HEARTBEAT_INTERVAL):
-                return
-
-    beat = threading.Thread(target=_beat, daemon=True)
-    beat.start()
-    try:
-        return process_task(task)
-    finally:
-        stop.set()
 
 
 def main() -> int:
@@ -178,13 +150,23 @@ def main() -> int:
                 empty_streak = 0
                 task = claim["task"]
                 task_id = task["id"]
+                # 단일 작업 single-flight — 이미 진행 중인 task_id 는 재submit 하지 않는다.
+                # 서버가 lease 만료/경합으로 같은 작업을 또 내줘도 같은 task_root 에서 두
+                # 다오가 동시에 돌지 않게 막는 2차 방어(1차는 서버 lease). claim 이 이미
+                # heartbeat 를 찍었으니 다음 claim 부터 서버가 이 작업을 자동 배제한다.
+                if task_id in inflight.values():
+                    print(
+                        f"[tick {tick}] task#{task_id} 이미 진행 중 — 재submit 건너뜀",
+                        flush=True,
+                    )
+                    continue
                 print(
                     f"[tick {tick}] claim task#{task_id} '{task.get('title', '')}' "
                     f"repo={task.get('repo_url') or ''} "
                     f"(진행 중 {len(inflight) + 1}/{MAX_CONCURRENCY})",
                     flush=True,
                 )
-                inflight[pool.submit(_process_with_heartbeat, task)] = task_id
+                inflight[pool.submit(process_task, task)] = task_id
                 continue  # 여유 있으면 대기 없이 바로 다음 선점.
 
             # 빈 tick — 선점할 작업 없음.
