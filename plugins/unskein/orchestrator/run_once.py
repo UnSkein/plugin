@@ -14,6 +14,7 @@ stdlib 만 사용 (requests 미설치 환경). 단순 1패스 — 큐 루프/재
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -723,21 +724,40 @@ def build_prompt(task: dict) -> str:
     )
 
 
-def run_dao(prompt: str, cwd: str, git_env: dict) -> tuple[int, str, str]:
+def build_resume_prompt(answer: str) -> str:
+    """대화턴(CLAUDE.md §4.1) — 사람 답변을 이어받는 다오 세션에 전달할 프롬프트.
+
+    --resume 로 직전 세션을 복원하므로 작업·단계 컨텍스트는 세션에 이미 있다. 여기선
+    사람 답변만 전달하고, 막혔던 지점을 이어 현재 단계를 마치고 §4.1 규약대로 보고하게 한다.
+    """
+    return (
+        "사람이 네 질문에 답했다. 아래 답변을 반영해 막혔던 지점부터 이어서 진행하라.\n\n"
+        f"사람 답변:\n{answer}\n\n"
+        "현재 단계를 마치고 CLAUDE.md 4.1 출력 규약대로 보고하라 — "
+        "'RESULT: status=<다음 status> stage=<단계명> summary=<요약>' 첫 줄"
+        "(산출물이 있으면 '<<<UNSKEIN_DOC' ~ 'UNSKEIN_DOC' 펜스 블록), "
+        "다시 막히면 'QUESTION: <질문>' 한 줄."
+    )
+
+
+def run_dao(
+    prompt: str, cwd: str, git_env: dict, resume_session_id: str | None = None
+) -> tuple[int, str, str]:
     """claude -p 비대화형 실행. (returncode, stdout, stderr) 반환.
 
     git_env 는 build_git_env() 가 만든 환경 — git 자격증명(GIT_SSH_COMMAND/
     GIT_ASKPASS+토큰)과 부모 인증(PATH/HOME/ANTHROPIC)을 함께 담는다.
     자식 다오가 이 env 로 클론·push 를 수행한다.
+
+    resume_session_id 가 있으면 `--resume <id>` 로 직전 다오 세션을 이어받는다
+    (대화턴 CLAUDE.md §4.1 — prompt 는 사람 답변). 같은 cwd 라야 세션 transcript
+    (~/.claude/projects/<cwd-slug>/<id>.jsonl)를 찾는다 — process_task 가 작업별
+    task_root 로 고정해 턴 사이 cwd 가 일정하다. 없으면 새 세션으로 prompt 를 구동.
     """
-    cmd = [
-        "claude",
-        "-p",
-        prompt,
-        "--output-format",
-        "json",
-        "--dangerously-skip-permissions",
-    ]
+    cmd = ["claude", "-p", prompt]
+    if resume_session_id:
+        cmd += ["--resume", resume_session_id]
+    cmd += ["--output-format", "json", "--dangerously-skip-permissions"]
     proc = subprocess.run(
         cmd,
         cwd=cwd,
@@ -745,6 +765,9 @@ def run_dao(prompt: str, cwd: str, git_env: dict) -> tuple[int, str, str]:
         text=True,
         timeout=CLAUDE_TIMEOUT,
         env=git_env,
+        # 비대화형 — stdin 을 닫는다. 닫지 않으면 claude 가 파이프 입력을 기다리며
+        # 수 초 지연(특히 --resume)하거나, 부모 stdin 상황에 따라 멈출 수 있다.
+        stdin=subprocess.DEVNULL,
     )
     return proc.returncode, proc.stdout, proc.stderr
 
@@ -837,10 +860,15 @@ def _parse_result_meta(meta: str) -> tuple[str | None, str | None, str | None]:
 
 
 def guess_transcript_path(session_id: str | None, cwd: str) -> str | None:
-    """claude transcript 추정 경로. ~/.claude/projects/<slug>/<session_id>.jsonl"""
+    """claude transcript 추정 경로. ~/.claude/projects/<slug>/<session_id>.jsonl
+
+    claude 는 프로젝트 디렉터리 슬러그를 만들 때 '/' 뿐 아니라 '.'·'_' 등 영숫자가
+    아닌 모든 문자를 '-' 로 치환한다(실측 확인). 기본 work_root 가 ~/.unskein/work 라
+    '.' 를 포함하므로 '/' 만 바꾸면 실제 경로와 어긋난다 — 같은 규칙으로 정규화한다.
+    """
     if not session_id:
         return None
-    slug = cwd.replace("/", "-")
+    slug = re.sub(r"[^a-zA-Z0-9]", "-", os.path.expanduser(cwd))
     return os.path.expanduser(f"~/.claude/projects/{slug}/{session_id}.jsonl")
 
 
@@ -967,14 +995,40 @@ def process_task(task: dict) -> int:
         _post(f"/api/mori/tasks/{task_id}/question", {"question": msg})
         return 1
 
-    # 2) 프롬프트
-    prompt = build_prompt(task)
+    # 2) 프롬프트 / 이어받기 결정 — answered 면 직전 다오 세션을 사람 답변으로 이어받는다.
+    claim_status = task.get("status") or ""
+    resume_session_id = None
+    if claim_status == "answered":
+        # 대화턴(CLAUDE.md §4.1). 이어받을 세션·답변이 없으면 조용히 새로 시작하지 않고
+        # QUESTION 으로 드러낸다(fallback 금지). 사람은 칸반에서 plan 으로 되돌려 새로
+        # 실행하거나 누락 사유를 본다.
+        resume_session_id = task.get("resume_session_id")
+        answer = task.get("answer")
+        if not resume_session_id:
+            msg = (
+                "이어받을 다오 세션이 없어 대화턴을 이을 수 없습니다 — 직전 세션 기록이 "
+                "비어 있습니다(질문 회수 전에 세션이 기록되지 않았을 수 있음). 처음부터 "
+                "다시 실행하려면 작업 패널에서 '실행대기로 되돌리기'(plan) 를 누르세요 "
+                "(이 작업은 보드 밖 상태라 간트에서 열 수 있습니다)."
+            )
+            print(f"[error] {msg}")
+            _post(f"/api/mori/tasks/{task_id}/question", {"question": msg})
+            return 1
+        if not answer:
+            msg = "사람 답변(answer)이 비어 있어 이어받을 내용이 없습니다."
+            print(f"[error] {msg}")
+            _post(f"/api/mori/tasks/{task_id}/question", {"question": msg})
+            return 1
+        prompt = build_resume_prompt(answer)
+    else:
+        prompt = build_prompt(task)
     print(f"[prompt]\n{prompt}\n")
 
     # 3) 다오 구동
-    print(f"[dao] claude -p 실행 (cwd={task_root}, timeout={CLAUDE_TIMEOUT}s) ...")
+    resume_note = f", --resume {resume_session_id}" if resume_session_id else ""
+    print(f"[dao] claude -p 실행 (cwd={task_root}, timeout={CLAUDE_TIMEOUT}s{resume_note}) ...")
     try:
-        rc, stdout, stderr = run_dao(prompt, task_root, git_env)
+        rc, stdout, stderr = run_dao(prompt, task_root, git_env, resume_session_id)
     except subprocess.TimeoutExpired:
         msg = f"claude -p timeout ({CLAUDE_TIMEOUT}s 초과)"
         print(f"[error] {msg}")
@@ -1001,8 +1055,14 @@ def process_task(task: dict) -> int:
 
     # 5) 회수
     if kind == "question":
+        # 대화턴(CLAUDE.md §4.1) — 다오가 막혀 질문을 던졌다. 이 세션을 함께 보고해야
+        # 사람이 답한 뒤(answered) 모리가 같은 세션을 --resume 으로 이어받을 수 있다.
+        # transcript 경로(클라이언트 로컬)는 서버에 보내지 않는다 — session_id 면 충분(§5).
         print(f"[report] QUESTION → {summary}")
-        _post(f"/api/mori/tasks/{task_id}/question", {"question": summary})
+        _post(
+            f"/api/mori/tasks/{task_id}/question",
+            {"question": summary, "session_id": session_id},
+        )
     elif kind == "result":
         # 단계 전이는 오직 마커의 next status 로만 일어난다(하드코딩 done 금지).
         print(f"[report] RESULT → status={status} stage={stage} summary={summary}")
@@ -1025,7 +1085,12 @@ def process_task(task: dict) -> int:
             + (summary or "(없음)")
         )
         print(f"[report] UNKNOWN → {msg}")
-        _post(f"/api/mori/tasks/{task_id}/question", {"question": msg})
+        # 다오는 실제로 한 턴 돌았으므로 세션을 함께 보고한다 — 사람이 답을 주면(answered)
+        # 같은 세션을 --resume 으로 이어받아 규약대로 다시 보고하게 한다.
+        _post(
+            f"/api/mori/tasks/{task_id}/question",
+            {"question": msg, "session_id": session_id},
+        )
     # 마감(done)된 작업의 격리 폴더는 정리한다 — 작업은 git 으로 push 되어 로컬 클론은
     # 폐기 가능. done 이 아니면(진행 중 단계) 다음 단계가 작업트리를 이어가야 하므로 보존.
     if kind == "result" and status == "done":
