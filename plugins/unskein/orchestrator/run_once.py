@@ -30,13 +30,10 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8")
 
 API_BASE = os.getenv("UNSKEIN_API", "https://unskein.mupai.studio")
+# 토큰은 import 시점에 강제하지 않는다 — 진단 도구(status.py/doctor)가 이 모듈을 import 해
+# preflight() 를 구동하기 때문이다(토큰 없음 자체가 진단 대상). 실제 강제는 작업을 잡는
+# 진입점(main)에서 한다. /api/health 같은 공개 엔드포인트는 토큰 없이도 점검할 수 있다.
 MORI_TOKEN = os.getenv("UNSKEIN_MORI_TOKEN")
-if not MORI_TOKEN:
-    print(
-        "UNSKEIN_MORI_TOKEN 환경변수가 필요합니다. "
-        "UnSkein 설정 화면에서 발급한 토큰을 넣으세요."
-    )
-    sys.exit(1)
 # claude -p 가 오래 걸릴 수 있어 넉넉히.
 CLAUDE_TIMEOUT = int(os.getenv("UNSKEIN_CLAUDE_TIMEOUT", "600"))
 # 작업별 heartbeat 주기(초). process_task 가 단일패스·동시 풀 양쪽에서 이 주기로 찍어,
@@ -422,24 +419,26 @@ def build_git_env(repo_url: str) -> dict:
 
 def _post(path: str, body: dict | None = None) -> dict:
     data = json.dumps(body or {}).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if MORI_TOKEN:  # 토큰 없으면 헤더 생략(None 헤더로 깨지지 않게) — 인증 필요한 호출은 서버가 401 로 막는다.
+        headers["X-Mori-Token"] = MORI_TOKEN
     req = urllib.request.Request(
         f"{API_BASE}{path}",
         data=data,
         method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "X-Mori-Token": MORI_TOKEN,
-        },
+        headers=headers,
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
 def _get(path: str) -> dict:
+    # 토큰 없으면 헤더 생략 — preflight 의 /api/health(공개) 는 토큰 없이도 점검된다.
+    headers = {"X-Mori-Token": MORI_TOKEN} if MORI_TOKEN else {}
     req = urllib.request.Request(
         f"{API_BASE}{path}",
         method="GET",
-        headers={"X-Mori-Token": MORI_TOKEN},
+        headers=headers,
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
         return json.loads(resp.read().decode("utf-8"))
@@ -1283,6 +1282,15 @@ def _process_task(task: dict) -> int:
 
 
 def main() -> int:
+    # 토큰 강제 — 작업을 잡으려면 모리 토큰이 필요하다. import 시점이 아니라 여기서 막아
+    # 모듈을 import-safe 하게 둔다(진단 도구가 preflight 만 구동). watch scope 조회(_get)도
+    # 토큰을 쓰므로 그 전에 막는다.
+    if not MORI_TOKEN:
+        print(
+            "UNSKEIN_MORI_TOKEN 환경변수가 필요합니다. "
+            "UnSkein 설정 화면에서 발급한 토큰을 넣으세요."
+        )
+        return 1
     # 0) watch 대상 — 인자(bis/prj 등)로 받으면 env 보다 우선 적용한 뒤 검증한다.
     _b, _p, _ = parse_watch_args(sys.argv[1:])
     apply_watch_args(_b, _p)

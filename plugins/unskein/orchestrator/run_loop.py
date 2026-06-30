@@ -69,6 +69,15 @@ def _on_sigint(signum, frame):
 def main() -> int:
     signal.signal(signal.SIGINT, _on_sigint)
 
+    # 토큰 강제 — 폴링·선점에 모리 토큰이 필요하다(run_once 가 import-safe 하므로 여기서 막는다).
+    if not run_once.MORI_TOKEN:
+        print(
+            "UNSKEIN_MORI_TOKEN 환경변수가 필요합니다. "
+            "UnSkein 설정 화면에서 발급한 토큰을 넣으세요.",
+            flush=True,
+        )
+        return 1
+
     # preflight — 작업을 잡기 전에 클라이언트 준비 점검(미충족이면 폴링 시작 안 함).
     ok, lines = run_once.preflight()
     print("[preflight] 작업 전 준비 점검:", flush=True)
