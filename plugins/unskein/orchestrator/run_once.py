@@ -580,6 +580,35 @@ def _git_behind(repo_dir: str) -> int | None:
         return None
 
 
+def _gh_auth_state() -> str:
+    """gh CLI 인증 상태를 범주로 돌려준다 — "ok" / "unauthed" / "error".
+
+    다오는 마감(unskein-git)에서 PR 을 `gh pr create` 로만 만든다(REST fallback 없음).
+    gh 가 없거나 미인증이면 작업을 다 하고도 PR 단계에서 튕기므로, 잡기 전에 막는다.
+
+    `gh auth status` 는 저장된 토큰을 api.github.com 에 질의해 유효성(폐기·만료 포함)까지
+    확인한다 → 종료코드 0 은 "github.com 에 인증된 계정이 있다"는 뜻이다(미로그인·무효 토큰은
+    비-0). 단 0 이 곧 "대상 repo 에 PR 가능"은 아니다 — scope 부족 토큰·비-collaborator 계정은
+    0 이어도 `gh pr create` 가 막힌다. 대상 repo 는 claim 전엔 미상이라 여기서 점검 불가하며
+    (그 잔여는 마감의 unskein-git 이 떠안는다), 여기서는 잡는 지배적 케이스(미설치·미로그인·
+    폐기/만료 토큰)만 본다.
+      - "ok": 종료코드 0.
+      - "unauthed": 종료코드 비-0 — 미로그인·토큰 무효.
+      - "error": 실행 자체 실패(미설치·타임아웃·네트워크 등) — 토큰이 아니라 연결 문제일 수 있다.
+    fallback 금지 — 어느 실패든 조용히 통과시키지 않는다(호출측이 차단).
+    """
+    try:
+        r = subprocess.run(
+            ["gh", "auth", "status"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=20,
+        )
+        return "ok" if r.returncode == 0 else "unauthed"
+    except Exception:  # noqa: BLE001 — 미설치(FileNotFoundError)·타임아웃·네트워크 등은 "error".
+        return "error"
+
+
 def preflight() -> tuple[bool, list[str]]:
     """작업을 잡기(claim) 전에 이 클라이언트가 일할 준비가 됐는지 점검한다.
 
@@ -588,7 +617,8 @@ def preflight() -> tuple[bool, list[str]]:
     여기서 막는다(fallback 금지 — 치명 항목 미충족이면 시작하지 않는다).
 
     점검(치명): 실행 환경(다오·git 바이너리가 잡히면 WSL 등 환경이 떠 있는 것)·
-    다오 스킬 원본·자격증명 폴더·작업 루트·큐 서버 도달. (경고): 플러그인 업데이트.
+    gh CLI 인증(다오가 마감에서 PR 을 만드는 데 필수)·다오 스킬 원본·자격증명 폴더·
+    작업 루트·큐 서버 도달. (경고): 플러그인 업데이트.
     repo pull 여부는 작업마다 prepare_repo 가 clone+fetch+reset 으로 보장하므로
     여기서 점검하지 않는다(작업 전엔 repo 미상).
 
@@ -609,6 +639,24 @@ def preflight() -> tuple[bool, list[str]]:
     check("다오 CLI(claude) 존재", shutil.which("claude") is not None,
           "PATH 에 claude 없음 — 다오를 못 띄운다")
     check("git 존재", shutil.which("git") is not None, "PATH 에 git 없음")
+    # gh CLI 인증 — 다오가 마감(unskein-git)에서 PR 을 `gh pr create` 로 만든다.
+    # 없거나 미인증이면 작업을 다 하고도 PR 단계에서 튕긴다 → 잡기 전에 막고 사람에게 요구한다.
+    if shutil.which("gh") is None:
+        check("gh CLI 인증(PR 생성)", False,
+              "PATH 에 gh 없음 — unskein-connect §1 로 설치 후 "
+              "`gh auth login`(mupaistudio) + `gh auth setup-git`")
+    else:
+        gh_state = _gh_auth_state()
+        if gh_state == "unauthed":
+            check("gh CLI 인증(PR 생성)", False,
+                  "gh 미인증/토큰 무효 — `gh auth login`(mupaistudio) + `gh auth setup-git` 실행")
+        elif gh_state == "error":
+            # 토큰 문제와 구분 — gh 가 응답을 못 줬다(타임아웃·네트워크·일시 장애일 수 있음).
+            check("gh CLI 인증(PR 생성)", False,
+                  "gh auth status 응답 없음(네트워크·일시 장애일 수 있음) — "
+                  "네트워크 확인 후 재시도, 지속되면 `gh auth login`(mupaistudio)")
+        else:  # "ok"
+            check("gh CLI 인증(PR 생성)", True)
 
     # 2) 필요한 것 — 다오 스킬 원본 / 자격증명 폴더 / 작업 루트.
     check("다오 스킬 원본(dao-skills)", os.path.isdir(DAO_SKILLS_SRC),

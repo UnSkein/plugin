@@ -7,6 +7,7 @@
   - UNSKEIN_WATCH_BUSINESS/PROJECT — watch 대상(미설정 시 전체)
   - UNSKEIN_CRED_DIR 존재 + 어떤 자격증명이 있는지 (.env / id_ed25519 — 값·내용 미출력)
   - UNSKEIN_WORK_ROOT 존재 + 클론된 폴더 목록
+  - gh CLI 존재 + 인증 (gh auth status — 다오 마감 PR 생성용, 토큰 값 미출력)
   - 서버 도달 (GET $UNSKEIN_API/api/health → status)
   - watch 대상 검증 + 가용 비즈니스/프로젝트 (GET $UNSKEIN_API/api/mori/scope, 토큰 필요)
 
@@ -18,6 +19,8 @@ stdlib 만 사용 (requests 미설치 환경).
 
 import json
 import os
+import shutil
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -133,6 +136,25 @@ def _check_work_root() -> str:
     return f"[OK] UNSKEIN_WORK_ROOT: {WORK_ROOT} (클론된 폴더 없음)"
 
 
+def _check_gh() -> str:
+    # gh CLI 존재 + 인증 — 다오가 마감(unskein-git)에서 PR 을 `gh pr create` 로만 만든다.
+    # 모리 preflight 가 잡기 전에 치명 항목으로 점검하는 것과 같은 신호. 토큰 값은 출력하지 않는다.
+    if not shutil.which("gh"):
+        return "[없음] gh CLI: 미설치 (unskein-connect §1 로 설치 + `gh auth login`)"
+    try:
+        r = subprocess.run(
+            ["gh", "auth", "status"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=20,
+        )
+    except Exception as exc:  # noqa: BLE001 — 타임아웃·네트워크 등은 응답 없음(토큰 문제와 구분)
+        return f"[실패] gh 인증: 응답 없음 (네트워크·일시 장애일 수 있음: {exc})"
+    if r.returncode == 0:
+        return "[OK] gh CLI: 인증됨 (PR 생성 가능)"
+    return "[없음] gh 인증: 미인증/토큰 무효 (`gh auth login`(mupaistudio) + `gh auth setup-git`)"
+
+
 def _check_health() -> str:
     # 읽기 전용 도달 확인 — GET /api/health 만. 작업 선점(POST /claim) 금지.
     url = f"{API_BASE}/api/health"
@@ -160,6 +182,7 @@ def main() -> int:
     print(_check_watch())
     print(_check_creds())
     print(_check_work_root())
+    print(_check_gh())
     print(_check_health())
     print(_check_scope())
     print("=" * 40)

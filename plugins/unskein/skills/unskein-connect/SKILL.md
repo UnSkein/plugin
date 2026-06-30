@@ -19,7 +19,7 @@ description: 모리 클라이언트(WSL)를 UnSkein 서버에 연결한다 — c
 - WSL 안에 `gh`(GitHub CLI)가 있고 인증돼 있는지 확인합니다(`gh auth status`). 다오가 마감 단계(`unskein-git`)에서 **PR 을 만들기** 때문입니다.
   - 없으면 설치를 안내합니다. sudo 가 없으면 공식 릴리스 바이너리를 `~/.local/bin` 에 풀어 넣습니다(gcloud 와 같은 무-sudo 방식): `cli/cli` 최신 릴리스의 `gh_*_linux_amd64.tar.gz` 를 받아 `bin/gh` 를 `~/.local/bin/gh` 로.
   - 인증: `gh auth login`(mupaistudio 계정, GitHub.com·HTTPS) → `gh auth setup-git`(이후 push 도 gh 자격증명으로 일원화).
-  - `gh` 가 없거나 미인증이면 PR 생성이 안 됩니다. 그래도 멈추지는 않습니다 — 다오는 브랜치 push 까지 하고 PR 은 사람에게 회수합니다(`unskein-git`). 자동 PR 을 원하면 여기서 갖춰 둡니다.
+  - `gh` 가 없거나 미인증이면 PR 생성이 안 됩니다. **모리는 작업을 잡기(claim) 전 preflight 에서 gh 인증을 치명 항목으로 점검하므로, 미설치·미인증이면 작업을 잡지 않고 종료하며 이 셋업을 요구합니다**(fallback 금지). 그러니 여기서 반드시 갖춰 두세요. (preflight 통과 후 세션 도중 gh 가 깨진 드문 경우엔, `unskein-git` 이 브랜치 push 까지만 하고 PR 은 사람에게 회수하는 2차 안전망이 있습니다.)
 
 ## 2. 연결 정보 설정
 
