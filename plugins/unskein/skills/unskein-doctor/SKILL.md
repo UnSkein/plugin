@@ -1,6 +1,6 @@
 ---
 name: unskein-doctor
-description: 모리 클라이언트가 작업을 못 돌릴 때 무엇이 깨졌는지 진단하고 복구를 안내한다 — 증상→원인 후보→복구 액션→재검증. /unskein:status 스냅샷을 출발점으로 증상에 맞는 갈래를 따라 원인을 좁힌다. 트리거 — 진단, 복구, 안 됨, 실패, doctor, 문제 해결, 토큰 인증 실패, 401, claude 못 찾음, clone 실패, push 실패, 작업 실행 실패, 화면 검증 안 됨, CDP 안 붙음, 9222 연결 실패, 스킬 충돌, CLAUDE.md 충돌, 전역 스킬 겹침, 기존 설치 충돌.
+description: 모리 클라이언트가 작업을 못 돌릴 때 무엇이 깨졌는지 진단하고 복구를 안내한다 — 증상→원인 후보→복구 액션→재검증. /unskein:status 스냅샷을 출발점으로 증상에 맞는 갈래를 따라 원인을 좁힌다. 트리거 — 진단, 복구, 안 됨, 실패, doctor, 문제 해결, 토큰 인증 실패, 401, claude 못 찾음, clone 실패, push 실패, 작업 실행 실패, 화면 검증 안 됨, CDP 안 붙음, 9222 연결 실패, 스킬 충돌, CLAUDE.md 충돌, 전역 스킬 겹침, 기존 설치 충돌, gh 인증 실패, gh 없음, PR 생성 안 됨, 작업을 하나도 못 잡음, preflight 차단.
 ---
 
 # UnSkein — 진단·복구 (doctor)
@@ -27,6 +27,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/orchestrator/status.py"
 - `UNSKEIN_MORI_TOKEN` — `설정됨` / `없음`.
 - `UNSKEIN_CRED_DIR` — 폴더 존재 + 어떤 자격증명이 있는지(`.env`/`id_ed25519`/`id_rsa`).
 - `UNSKEIN_WORK_ROOT` — 폴더 존재 + 클론된 폴더 목록.
+- `gh CLI` — `인증됨` / `미설치` / `미인증` / `응답 없음`. 다오가 마감에서 PR 을 만드는 데 필수(모리 preflight 치명 항목).
 - 서버 도달 — `status=ok` 또는 실패 사유.
 
 사용자에게 실제 증상도 함께 묻습니다(예: "한 바퀴 실행했는데 어디서 멈췄나요?", 화면에 나온 에러 메시지 한 줄). 스냅샷의 `없음`/`실패` 항목과 사용자 증상을 맞춰 아래 갈래로 들어갑니다.
@@ -44,6 +45,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/orchestrator/status.py"
 | 7 | 서버 도달 실패(`GET /api/health`) | 네트워크·주소 문제 | 주소·네트워크 확인 |
 | 8 | 화면 검증(CDP)이 Chrome(9222)에 안 붙음 | WSL Node 로 실행해 `127.0.0.1` 이 WSL 루프백을 가리킴 / Chrome 미기동 | 윈도우 Node·PowerShell 로 실행 (`unskein-test` 6장) |
 | 9 | 모리·다오가 규약과 다르게 동작(출력 형식 어김, 엉뚱한 지침·스킬을 따름) | 기존 전역 스킬·`CLAUDE.md`·플러그인이 unskein 과 충돌 | 아래 9번에서 충돌 점검 |
+| 10 | 작업을 하나도 못 잡고 preflight 가 `[실패] gh CLI 인증(PR 생성)` 으로 종료(claim 안 함) | gh 미설치·미인증·토큰 무효 | 아래 10번 — `unskein-connect` §1 로 `gh auth login` + `gh auth setup-git` |
 
 각 갈래의 진단·복구 절차는 아래와 같습니다.
 
@@ -169,11 +171,27 @@ ls ~/.claude/plugins/marketplaces/ 2>/dev/null
 
 복구: 충돌은 임의로 지우지 않습니다 — 무엇이 겹치는지 사용자에게 그대로 보여주고, 어느 것을 살릴지 함께 정합니다. 전역 `CLAUDE.md` 의 지침이 모리·다오 동작에 끼어들면 그 항목을 사용자에게 보고하고, unskein 규약(plugin `CLAUDE.md`·dao-skills `CLAUDE.md`)이 우선되도록 정리할지 상의합니다. 겹치는 전역 스킬은 이름을 바꾸거나 한쪽을 비활성화할지 사용자와 정합니다(fallback 으로 한쪽을 임의 삭제하지 않습니다).
 
+### 10. gh 미설치·미인증 (preflight 가 claim 전 차단)
+
+진단: 모리가 작업을 하나도 잡지 못하고 preflight 단계에서 `[실패] gh CLI 인증(PR 생성)` 을 출력하며 종료하면(claim 안 함), gh 가 없거나 인증이 깨진 것입니다. 다오는 마감(`unskein-git`)에서 PR 을 `gh pr create` 로만 만들기 때문에(REST fallback 없음), gh 인증은 작업을 잡기 전에 갖춰야 하는 치명 항목입니다. 스냅샷의 `gh CLI` 항목으로 갈래를 좁힙니다.
+
+```shell
+command -v gh && gh auth status
+```
+
+- `command -v gh` 가 비면 미설치입니다.
+- gh 는 있는데 `gh auth status` 가 비-0(미로그인·토큰 무효)이면 미인증입니다.
+- `gh auth status` 가 네트워크·타임아웃으로 응답을 못 주면(스냅샷에 `응답 없음`) gh 가 아니라 연결 문제일 수 있으니 네트워크부터 확인합니다.
+
+복구: `unskein-connect` §1 로 gh 를 설치(무-sudo 환경이면 공식 릴리스 바이너리를 `~/.local/bin`)하고, `gh auth login`(mupaistudio 계정, GitHub.com·HTTPS) → `gh auth setup-git` 으로 인증합니다. 토큰 값은 화면에 출력하지 않습니다.
+
+참고: preflight 는 통과(gh 인증됨)했는데도 마감에서 PR 이 권한(403)으로 막히면, 토큰 scope 가 부족하거나 그 계정이 대상 repo 의 collaborator 가 아닌 경우입니다(preflight 는 대상 repo 를 모르므로 여기까진 못 잡습니다 — `unskein-git` 이 브랜치 push 까지만 하고 PR 은 사람에게 회수합니다). 그 repo 에 push/PR 권한이 있는 계정으로 `gh auth login` 했는지, 토큰 scope(`repo`·`workflow`)를 확인합니다.
+
 ## 3. 재검증
 
 복구 후 같은 단계에서 다시 확인해 증상이 사라졌는지 봅니다:
 
-- 1·4·5·7번: `/unskein:status` 를 다시 돌려 해당 항목이 `OK` 로 바뀌었는지 확인합니다.
+- 1·4·5·7·10번: `/unskein:status` 를 다시 돌려 해당 항목이 `OK` 로 바뀌었는지 확인합니다.
 - 2·3·6번: `/unskein:run` 한 바퀴를 실제로 돌려 claim·clone·push·회수까지 진행되는지 확인합니다.
 - 8번: 윈도우에서 `start.ps1` 의 `READY` 출력과 `remote.js tabs` 응답으로 Chrome(9222) 연결이 되는지 확인합니다.
 - 9번: 충돌을 정리한 뒤 `/unskein:run` 한 바퀴가 규약(`RESULT:`/`QUESTION:`)대로 회수되는지 확인합니다.
