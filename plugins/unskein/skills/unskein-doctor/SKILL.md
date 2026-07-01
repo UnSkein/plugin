@@ -13,6 +13,25 @@ description: 모리 클라이언트가 작업을 못 돌릴 때 무엇이 깨졌
 - 못 고치면 임시 우회를 만들지 않습니다. 사유를 사용자에게 그대로 보고하고 멈춥니다(fallback 금지).
 - 복구 후에는 재검증 단계까지 진행합니다.
 
+## 0. 역할 판별 (먼저 — 오진 방지)
+
+doctor 의 `preflight()` 는 **EXECUTOR(모리 실행기)** 가 작업을 잡기 위한 준비 점검입니다. 그래서 이 머신의 역할을 먼저 가릅니다 — 잘못 읽으면 executor-전용 항목을 "고장"으로 오진합니다.
+
+- **EXECUTOR(모리 실행기)** — `/unskein:run`·`/unskein:watch` 로 작업을 claim 해 다오를 돌리는 클라이언트. preflight 전 항목이 유효합니다.
+- **PLANNER(운영자/등록)** — 코드베이스를 보고 스코프·WBS 를 서버 큐에 등록하는 세션(개발·claim 안 함). **executor-전용 항목은 해당 없음**입니다.
+- 한 머신이 **둘 다** 겸할 수 있습니다.
+
+**executor-전용 항목 — PLANNER 전용 머신에선 `없음`/`[실패]` 여도 정상(고장 아님):**
+- `UNSKEIN_MORI_TOKEN` — claim 인증용(X-Mori-Token). PLANNER 는 대신 PLANNER 토큰(kind=planner) 또는 admin 로그인을 씁니다.
+- `자격증명 폴더(creds)` — 다오가 고객 repo 를 clone/push 할 때만.
+- (dao-skills 원본·work 루트도 executor 실행용 — executor 겸할 때만 갖추면 됩니다.)
+
+**두 역할 공통 — 어느 쪽이든 `[실패]` 면 진짜 문제:** `claude`·`git`·`gh` 인증·큐 서버 도달·플러그인 최신.
+
+역할이 모호하면 임의 판단하지 말고 사용자에게 묻습니다. **PLANNER 전용**이면 아래 §1 스냅샷에서 executor-전용 `[실패]` 는 "해당 없음(정상)" 으로 읽고, 공통 항목만 갈래(§2)로 좁힙니다.
+
+> PLANNER 준비 확인은 별도입니다 — `UNSKEIN_PLANNER_TOKEN`(`~/.unskein/planner.env`) 또는 admin 로그인으로 등록 API(businesses·projects·tasks·plan)에 닿으면 됩니다. `플래너-설치.md` §4 · ADR-0013.
+
 ## 1. 스냅샷 확보
 
 먼저 현재 상태를 읽어 증상을 확인합니다:
@@ -24,7 +43,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/orchestrator/status.py"
 출력은 두 부분입니다 — **설정 항목**과, 모리 `preflight()` 를 그대로 구동한 **준비 점검**(작업을 잡기 전 게이트와 동일한 점검). 같은 단일 출처라 스냅샷과 실제 게이트가 어긋나지 않습니다.
 
 - 설정: `UNSKEIN_API`, `UNSKEIN_MORI_TOKEN`(`설정됨`/`없음`), watch 대상, 가용 scope.
-- 준비 점검(preflight): 다오 CLI(`claude`)·`git`·`gh` 인증·dao-skills 원본·creds 폴더·work 루트·큐 서버 도달·플러그인 최신. 각 줄이 `[OK]`/`[실패]`/`[경고]` 로 나옵니다 — **`[실패]` 줄이 곧 모리가 작업을 못 잡는 사유입니다.**
+- 준비 점검(preflight): 다오 CLI(`claude`)·`git`·`gh` 인증·dao-skills 원본·creds 폴더·work 루트·큐 서버 도달·플러그인 최신. 각 줄이 `[OK]`/`[실패]`/`[경고]` 로 나옵니다 — **`[실패]` 줄이 곧 모리(EXECUTOR)가 작업을 못 잡는 사유입니다.** 단 §0 을 먼저 적용해, **PLANNER 전용 머신이면 executor-전용 항목(`UNSKEIN_MORI_TOKEN`·`creds`)의 `[실패]`/`없음`은 고장이 아니라 "해당 없음(정상)"** 으로 읽습니다.
 
 `creds` 에 어떤 자격증명 파일이 있는지는 3번에서 `ls` 로, `work` 루트의 소유자·권한은 4번에서 `ls -ld` 로 확인합니다(스냅샷 줄엔 존재·OK 여부만 나옵니다).
 
