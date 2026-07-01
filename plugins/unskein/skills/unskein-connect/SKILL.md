@@ -35,9 +35,16 @@ description: 모리 클라이언트(WSL)를 UnSkein 서버에 연결한다 — c
 정한 타겟의 두 값을 WSL 환경에 영속 설정합니다.
 
 - `UNSKEIN_API` — 위 표에서 고른 작업 큐 주소.
-- `UNSKEIN_MORI_TOKEN` — 그 서버에서 발급한 연결 토큰(UnSkein 설정 화면에서 발급).
+- `UNSKEIN_MORI_TOKEN` — 그 서버에서 **kind=mori** 로 발급한 연결 토큰(UnSkein 설정 화면). EXECUTOR(claim)용이라 kind=mori 다 — 운영자 등록용 kind=planner 토큰(`~/.unskein/planner.env`, `플래너-설치.md` §4)과 다른 토큰이니 섞지 마세요(ADR-0013).
 
 한 머신이 두 타겟을 오가면, 짝(API+토큰)을 **통째로** 담은 env 파일을 타겟별로 둡니다 — `~/.unskein/env.local`(로컬) / `~/.unskein/env.test`(테스트 서버). watch·run 전에 그 파일을 `source` 해서 해당 타겟의 API+토큰을 한꺼번에 잡습니다. 셸 프로필에는 **상시 쓰는 한 타겟만** 두고 나머지는 env 파일로 분리해, 스테일한 기본값이 조용히 따라붙지 않게 합니다.
+
+> **템플릿에서 생성** — 플러그인에 커밋된 `templates/executor.env.sample`(비밀 없음)을 타겟 파일로 복사해 값만 채웁니다(권한 600, ADR-0013):
+> ```shell
+> cp "${CLAUDE_PLUGIN_ROOT}/templates/executor.env.sample" ~/.unskein/env.test
+> chmod 600 ~/.unskein/env.test    # 편집기로 UNSKEIN_MORI_TOKEN 채우기 (셸 인자로 넣지 말 것)
+> ```
+> 값은 화면·셸 기록에 남기지 않도록 **편집기로 직접** 입력합니다. 두 타겟을 다 쓰면 `env.local` 로도 같은 복사를 반복합니다.
 
 토큰·주소는 화면에 다시 출력하지 않습니다. 값이 빠지면 임의로 채우지 말고 사용자에게 물어 멈춥니다.
 
