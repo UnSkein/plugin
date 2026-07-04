@@ -1,11 +1,11 @@
 ---
 name: unskein-wbs
-description: WBS(작업 분해 구조) 관리 — 비즈니스/프로젝트의 WBS 노드를 생성·수정·삭제(CUD)하고, 각 카드의 plan_doc을 자기완결(카드 하나로 착수 가능) 규약으로 채우며, 의존성(dependencies)을 선점 게이트 의미론에 맞춰 말단↔말단으로 인코딩·검증하고, repo의 wbs.md 문서와 DB(로컬·프로덕션)를 일관되게 유지한다. 병합(merge)·분할(split)은 해당 API가 생기면 추가하며 현재는 공백이다. 트리거 — wbs 추가/수정/삭제, 작업 분해 등록, wbs 관리, wbs 반영, plan_doc 등록, 의존성 등록, unskein-wbs, 프로젝트에 작업 등록.
+description: WBS(작업 분해 구조) 관리 — 비즈니스/프로젝트의 WBS 노드를 생성·수정·삭제(CUD)하고, 각 카드의 plan_doc을 자기완결(카드 하나로 착수 가능) 규약으로 채우며, 의존성(dependencies)을 선점 게이트 의미론에 맞춰 말단↔말단으로 인코딩·검증하고, 간트 일정(plan_start/plan_end)을 오늘 기준·의존성 계단식으로 배치·조정하며, repo의 wbs.md 문서와 DB(로컬·프로덕션)를 일관되게 유지한다. 병합(merge)·분할(split)은 해당 API가 생기면 추가하며 현재는 공백이다. 트리거 — wbs 추가/수정/삭제, 작업 분해 등록, wbs 관리, wbs 반영, plan_doc 등록, 의존성 등록, unskein-wbs, 프로젝트에 작업 등록, 일정 배치·조정, 일정 재배치, 간트 날짜(plan_start/plan_end) 채우기.
 ---
 
 # /unskein-wbs — WBS 관리 (biz·prj CUD + plan_doc 자기완결 + 의존성 게이트)
 
-특정 **비즈니스 → 프로젝트**의 WBS(작업 트리)를 생성·수정·삭제하고, 각 카드의 `plan_doc`을 자기완결 규약(§4)으로 채우며, 의존성 게이트(§1.1·§5)를 말단↔말단으로 인코딩하고, repo 문서(`docs/local/wbs.md`)와 DB(로컬·프로덕션)를 일관되게 유지한다. 병합(merge)·분할(split)은 §7에 자리만 두고 API 구현 후 채운다.
+특정 **비즈니스 → 프로젝트**의 WBS(작업 트리)를 생성·수정·삭제하고, 각 카드의 `plan_doc`을 자기완결 규약(§4)으로 채우며, 의존성 게이트(§1.1·§5)를 말단↔말단으로 인코딩하고, repo 문서(`docs/local/wbs.md`)와 DB(로컬·프로덕션)를 일관되게 유지한다. 병합(merge)·분할(split)은 §8에 자리만 두고 API 구현 후 채운다.
 
 핵심 원칙: **WBS의 단일 출처는 두 곳** — 사람이 읽는 분해 문서 `docs/local/wbs.md` 와 라이브 작업 트리(DB, 칸반·간트가 읽음). CUD 시 둘을 함께 갱신한다. ido가 "로컬·프로덕션 둘 다"를 요청하면 양쪽 환경에 같은 변경을 반영한다.
 
@@ -16,6 +16,7 @@ description: WBS(작업 분해 구조) 관리 — 비즈니스/프로젝트의 W
 - **상태 매핑** (문서 ↔ DB status): `✅`=`done`, `🟡`=`exec`, `⬜`=`backlog`. 컨테이너(상위) 노드는 보통 `backlog`. 진행률은 status에서 파생(`progress_for`) — 신규는 `backlog`(0).
 - **정렬**: `sort_order`는 형제 표시 순서. 위상순서 유지(부모의 sort_order < 자식). 신규 노드는 기존 최대 sort_order 뒤에 붙인다.
 - **격리**: task는 project_id, project는 business_id에 속한다. 쓰기는 멤버(owner/admin/member)만 — viewer는 403. 항상 대상 비즈니스·프로젝트를 이름으로 먼저 특정한다.
+- **일정 필드**: 간트(WBS) 막대의 가로 위치는 **오직 `plan_start`·`plan_end` 두 필드**로 정해진다. 둘 중 하나라도 비면(null) 프론트가 **오늘→오늘+1** 하루짜리로 폴백하고 흐리게(`unscheduled`) 표시해 모든 막대가 오늘 열에 몰린다. → 신규·수정 노드는 §6 규칙(오늘 기준·의존성 계단식)으로 두 필드를 반드시 채운다. `due_dt`·`created_at`·`actual_*`는 막대 위치에 안 쓴다.
 - 추측 금지(fallback 금지): 대상 biz/project가 없거나 모호하면 멈추고 묻는다.
 
 ### 1.1 dependencies = 선점(claim) 게이트 (간트 표시용 아님)
@@ -88,7 +89,7 @@ DELETE /api/tasks/{id}                    노드 삭제
 
 1. 대상 프로젝트의 현재 노드를 조회해 `wbs_code → id` 맵과 최대 `sort_order`를 만든다.
 2. 추가할 노드를 **위상순서(부모 먼저)** 로 정렬한다.
-3. 각 노드: 이미 같은 `wbs_code`가 있으면 skip(멱등). 없으면 `parent_id` = 부모 wbs_code의 id, `sort_order` = 증가값으로 생성. **말단이면 §4 자기완결 표준(7요소)으로 `plan_doc`을 채우고, 루트면 스콥 전문을 싣는다.**
+3. 각 노드: 이미 같은 `wbs_code`가 있으면 skip(멱등). 없으면 `parent_id` = 부모 wbs_code의 id, `sort_order` = 증가값으로 생성. **말단이면 §4 자기완결 표준(7요소)으로 `plan_doc`을 채우고, 루트면 스콥 전문을 싣는다. `plan_start`/`plan_end`는 §6(오늘 기준·의존성 계단식)으로 계산해 함께 넣는다** — 날짜를 비우면 간트에서 오늘 열에 몰리므로 빈 날짜 금지.
 4. **의존 간선 등록** — 스콥(`unskein-scope`)이 준 **말단 wbs_code 기준 간선 목록**을 받아:
    1) 각 wbs_code를 **환경별로** `task id`로 조회해 변환한다 (id 하드코딩 금지 — 환경마다 다르다).
    2) 후행 카드의 `dependencies`(선행 id 배열)에 기록한다.
@@ -97,14 +98,50 @@ DELETE /api/tasks/{id}                    노드 삭제
 5. 양쪽 환경 요청이면 각 환경에서 1~4를 독립 수행(환경마다 id가 다르므로 맵·간선 변환도 환경별로).
 6. `docs/local/wbs.md`에 같은 노드를 해당 섹션 위치에 추가하고, **의존 간선 목록도 함께 기록**한다(DB·문서 이중 출처 유지).
 
-## 6. Update / Delete
+## 6. 일정 배치·조정 (plan_start/plan_end) — 오늘 기준 + 의존성 계단식
+
+간트 막대의 가로 위치는 오직 `plan_start`·`plan_end`로 정해지고, 비면 오늘 열에 몰린다(§1). 그래서 **노드를 만들거나 "일정 조정/재배치"를 요청받으면 이 절의 forward pass로 두 필드를 계산해 채운다.** 이 계산은 이 스킬의 기능이다 — 스콥 본문은 안 쓰지만 일정 날짜는 이 스킬이 정한다.
+
+### 규칙
+
+- **앵커 날짜**: 기본은 **실행일(오늘)**. ido가 시작일을 지정하면 그 날짜. 단위는 일(day), 값은 `YYYY-MM-DD`(nullable `DateTime` 컬럼 — 날짜만 넣으면 자정으로 저장).
+- **기간(duration)**: 리프(말단) 작업 기본 **1일** → `plan_end = plan_start + 1일`. ido가 기간(예 3일·1주)을 주면 그 값을 리프 기본으로 쓴다. **컨테이너(자식 있는 상위)** 는 자식 범위를 스팬한다 — `plan_start = min(자식 plan_start)`, `plan_end = max(자식 plan_end)`.
+- **의존성 계단식(하나씩 오른쪽)**: 선행이 있으면 후행은 **선행이 끝난 지점에서 시작**한다.
+  - 선행 없음 → `plan_start = 앵커`.
+  - 선행 있음 → `plan_start = max(모든 선행의 plan_end)`, `plan_end = plan_start + 기간`.
+  - **선행 판정 순서**: ① 명시적 `dependencies`(선행 task) 우선. ② `dependencies`가 비면 **같은 부모 아래 직전 형제**(sort_order/wbs_code 바로 앞)를 선행으로 본다 → 의존성을 안 걸어도 형제가 계단식으로 하나씩 밀린다.
+- **캘린더 일**(주말 포함)이 기본. 근무일만(주말 스킵) 원하면 ido 지시 시 적용한다.
+
+### 절차 (forward pass 1회)
+
+1. `GET .../tasks`로 현재 노드와 각 노드의 `dependencies` **실제 형식**을 읽는다(형식은 응답 그대로 따른다 — 추측해 새 형식을 만들지 않는다).
+2. 노드를 **위상순서**(선행 먼저)로 정렬한다. 순환이 발견되면 멈추고 해당 노드를 보고한다(임의 배치 금지).
+3. 순서대로 각 리프의 `plan_start`/`plan_end`를 위 규칙으로 계산하고, 컨테이너는 자식 확정 뒤 스팬으로 채운다.
+4. 값을 쓴다 — 생성 시 `POST .../tasks`의 `plan_start`/`plan_end`(와 `dependencies`), 기존 노드 조정 시 `PATCH /api/tasks/{id}`.
+5. **status·plan_doc은 건드리지 않는다** — 일정 배치는 상태·스콥과 분리(§3 원칙 유지).
+
+### 일정 조정(reflow) 모드
+
+"일정 조정/재배치/날짜 다시 잡아줘" 요청이면 노드를 새로 만들지 않고, 위 절차로 **기존 노드의 `plan_start`/`plan_end`만** 앵커(오늘 또는 지정일)부터 다시 흘려 `PATCH`한다. 대량 PATCH·프로덕션이면 실행 전 대상 범위(노드 수·앵커·기간)를 한 줄로 확인한다.
+
+### 예 (앵커 = 오늘 07-05, 리프 1일)
+
+```
+1  설계        선행없음        07-05 → 07-06
+2  구현   dependencies=[1]    07-06 → 07-07
+3  테스트 dependencies=[2]    07-07 → 07-08
+4  문서        선행없음        07-05 → 07-06   (독립 — 1과 같은 날 병렬 시작)
+```
+→ 의존 사슬 1→2→3은 하루씩 오른쪽 계단, 독립 노드 4는 오늘 시작. (전에는 넷 다 07-05→07-06으로 몰렸다.)
+
+## 7. Update / Delete
 
 - **Update**: `PATCH /api/tasks/{id}` 로 `title/description/plan_doc(자기완결 §4)/status/wbs_code/sort_order/parent_id/dependencies/progress/is_milestone` 등 변경. 트리 위치를 바꾸면(부모/코드 변경) 자식들의 wbs_code도 일관되게 갱신한다. 문서도 동일 반영.
 - **Delete**: `DELETE /api/tasks/{id}`. 하위가 있으면 자손까지(말단부터) 지운다 — 고아 노드를 남기지 않는다. 문서에서도 해당 블록을 제거.
 - **간선 재배선(삭제·이동·split/merge)**: 노드를 지우거나 옮기면 **그 노드를 가리키는 `dependencies` 간선을 재배선하거나 제거**한다. 끊긴 id는 **fail-open**이라(§1.1) 조용히 게이트가 사라져 **무순서 선점이 재발**한다 — 반드시 후행 카드의 `dependencies` 배열을 갱신하고 문서 간선도 맞춘다.
 - 파괴적 변경(삭제·대량 수정)·프로덕션 대상은 실행 전 범위를 확인한다.
 
-## 7. 병합(merge) · 분할(split) — 자리 (API 구현 후 채움)
+## 8. 병합(merge) · 분할(split) — 자리 (API 구현 후 채움)
 
 <!-- 미구현: 작업 분리(split)/통합(merge) API가 아직 없다.
      스펙은 docs/specs/wbs-split-merge.md (WBS §7.11). 백엔드 split/merge 엔드포인트가
@@ -113,10 +150,11 @@ DELETE /api/tasks/{id}                    노드 삭제
 
 _아직 비어 있음 — split/merge 엔드포인트 구현 후 추가._
 
-## 8. 검증
+## 9. 검증
 
 - 생성/수정 후 `GET .../tasks`로 노드 수·`wbs_code`·`parent_id` 트리가 의도대로인지 확인한다. (루트 수, 고아 parent 참조 0, 상태 분포)
 - **의존 간선**: 모든 `dependencies` 원소가 존재하는 task id인지(끊긴 참조 = 조용한 fail-open) · 양끝이 모두 **말단**인지 · 순환이 없는지 확인한다.
 - **plan_doc 자기완결**: 말단 카드가 §4 7요소를 갖췄는지, 루트가 스콥 전문을 실었는지, repo 단독 참조(옛 포인터)가 남지 않았는지 점검한다.
 - 양쪽 환경 반영이면 두 환경의 노드 수가 같은지 대조한다.
 - `docs/local/wbs.md` 와 DB 트리가 어긋나지 않는지(노드 누락·중복·간선 누락) 본다.
+- **일정**: `plan_start`/`plan_end`가 빈 노드 0(모두 채워짐), 각 노드 `plan_start < plan_end`, 선행 관계에서 `선행.plan_end ≤ 후행.plan_start`(계단 유지). 간트에서 막대가 오늘 열에 몰리지 않고 펼쳐지는지 본다.
