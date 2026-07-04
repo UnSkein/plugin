@@ -1,6 +1,6 @@
 ---
 name: unskein-test
-description: 다오가 개발한 화면을 모리가 CDP로 떠 있는 Chrome에 붙어 실제로 검증한다 — 콘솔 에러·네트워크 실패 수집 + 실제 렌더 확인 + 화면 캡처. 트리거 — UI 테스트, 화면 검증, 브라우저 테스트, 스크린샷, CDP, 9222, 콘솔 에러 수집, 네트워크 실패 확인, 화면 캡처, 셀렉터 확인, 런타임 검증.
+description: 다오가 개발한 화면을 모리(TESTER)가 CDP로 떠 있는 Chrome에 붙어 실제로 검증한다 — 콘솔 에러·네트워크 실패 수집 + 실제 렌더 확인 + 화면 캡처. 수동 진단과, UnSkein 큐에서 test 작업을 스스로 선점→검증→보고하는 자율 TESTER 루프 둘 다 제공한다. 트리거 — UI 테스트, 화면 검증, 브라우저 테스트, 스크린샷, CDP, 9222, 콘솔 에러 수집, 네트워크 실패 확인, 화면 캡처, 셀렉터 확인, 런타임 검증, TESTER, 테스터 루프, test 작업 선점, 큐 화면검증, claim.
 ---
 
 # UnSkein — 화면 런타임 검증 (모리)
@@ -10,6 +10,56 @@ description: 다오가 개발한 화면을 모리가 CDP로 떠 있는 Chrome에
 코드 검증(`unskein-verify`: 타입체크·빌드·테스트)과 보완 관계입니다. 글로벌 헌장의 "헤드리스 다오 → 윈도우 모리 UI 검증" 핸드오프에 해당합니다 — 다오는 WSL 헤드리스라 브라우저 화면을 띄울 수 없으므로, 실제 화면 검증은 윈도우의 모리가 맡습니다. UI 테스트는 모리 담당입니다.
 
 스크립트 경로는 모두 플러그인 기준입니다: `${CLAUDE_PLUGIN_ROOT}/skills/unskein-test/scripts/...`.
+
+이 스킬은 두 가지로 씁니다: **수동 진단**(§1–§7 — 사람이 화면 하나를 직접 확인)과 **자율 TESTER 루프**(§0 — 큐에서 `test` 작업을 스스로 선점→검증→보고). 큐에 연결해 돌리려면 §0 을 먼저 읽으세요.
+
+## 0. 자율 검증 루프 — TESTER 배선
+
+UnSkein 큐의 `test` 단계를 TESTER 가 스스로 처리합니다. 파이프라인: `plan(구현+자체검증, EXECUTOR)` → **`test`(화면검증, TESTER)** → `inspect(마감, EXECUTOR)` → `done`.
+
+### 0.1 역할·인증
+
+- TESTER 는 **윈도우 Claude Code 세션**입니다(다오=WSL 코드검증, 테스터=윈도우 화면검증 — 프로세스 경계로 "구현≠검증"을 실현). CDP 9222 는 윈도우 프로세스라 WSL 에서 못 붙습니다.
+- **테스터 토큰**(kind=tester): 웹에서 발급(`POST /me/mori-tokens {kind:"tester"}`). EXECUTOR(kind=mori) 토큰과 달리 큐에서 **`test` 작업만** 집습니다(서버 스테이지 게이트). 값은 환경변수로만 둡니다(비밀 무잔존, 화면 출력 금지):
+  - `UNSKEIN_API_BASE`(예: `https://unskein.mupai.studio`), `UNSKEIN_MORI_TOKEN`(테스터 토큰).
+- **여러 사이트**: 한 TESTER 가 자기 멤버십의 모든 사이트를 담당합니다. 특정 사이트만 보려면 `claim --business=<이름> --project=<이름>` 로 좁힙니다(watch 스코프). `node queue.js scope` 로 담당 가능 사이트를 확인합니다.
+
+### 0.2 한 tick — claim → 검증 → report
+
+`queue.js`(서버 왕복) + `start.ps1`/`remote.js`(CDP)로 한 작업을 처리합니다:
+
+1. **선점**: `node ${CLAUDE_PLUGIN_ROOT}/skills/unskein-test/scripts/queue.js claim` → `{claimed, task}`. `claimed:false` 면 조용히 종료(대기 작업 없음). task 에는 검증 대상 **`tested_url`**, 수용 기준(`title`/`description`/`plan_doc`), `subtree`(하위 작업)가 실려 옵니다.
+2. **lease 유지**: 검증이 길면 주기적으로 `node queue.js heartbeat <id>`(서버 stale 기준 180s — 60s 안팎으로 갱신).
+3. **화면 기동·검증**: `start.ps1 -Url <tested_url>` → `remote.js navigate/collect/attrs/shot`(§4) 로 수용 기준의 시나리오를 수행. 콘솔 에러·네트워크 실패·렌더·셀렉터를 수집하고 화면을 캡처합니다.
+4. **산출물 저장(매뉴얼 재사용)**: 이번 검증에 쓴 **시나리오 스크립트**(remote.js 명령 순서)와 스크린샷을 작업별 폴더(`scripts/cases/<task_id>/`)에 남깁니다 — 사용자 매뉴얼 작성 시 그대로 재사용합니다. 경로를 payload 에 싣습니다.
+5. **판정·보고**:
+   - **PASS** → `node queue.js report <id> --status=inspect --summary="..." --doc=<리포트.md> --payload=<payload.json>`. (다음 단계 inspect=마감은 별도 담당.)
+   - **FAIL** → `--status=plan`(화면검증 FAIL 롤백 — 구현자 EXECUTOR 가 다시 집습니다). 실패 근거를 payload.findings 에 담습니다.
+6. **판단 필요(사양이냐 버그냐)** → `node queue.js question <id> --text="..."` 로 사람에게 묻고(waiting) tick 을 종료합니다. 운영자가 웹에서 답하면 다음 claim 때 그 답이 실려 재개됩니다.
+
+### 0.3 결과 슬롯 — `payload['test']`
+
+report 의 `--payload` 는 아래 구조(JSON)로, 서버가 `task.payload['test']` 에 저장합니다. 웹 칸반·매뉴얼 작성이 이걸 읽습니다:
+
+```jsonc
+{
+  "verdict": "PASS | FAIL | BLOCKED",
+  "tested_url": "https://.../board",          // 실제로 연 주소
+  "build_sha": "97b43af2",                     // /api/version 등에서 확인한 대상 빌드(있으면)
+  "scenarios": [{ "id": "S-1", "name": "...", "result": "PASS", "note": "" }],
+  "findings":  [{ "severity": "P0|P1|P2|P3", "summary": "...", "evidence": "cases/<id>/shots/01.png" }],
+  "console_errors": [], "network_failures": [],
+  "screenshots": ["cases/<id>/shots/01.png"],
+  "scripts":     ["cases/<id>/scripts/scenario.md"],   // 검증에 쓴 스크립트(매뉴얼 재사용)
+  "report_path": "cases/<id>/report.md"
+}
+```
+
+스크린샷·스크립트는 **경로만** payload/DB 에 두고, 실제 파일은 저장소(프로젝트 repo 의 test-cases 등)에 커밋해 매뉴얼 작성 시 찾게 합니다.
+
+### 0.4 연속 운용 (CronCreate)
+
+한 tick 은 1건만 처리합니다. 연속 감시는 클로드 세션이 폴링하거나 CronCreate 로 주기 재구동합니다(예: `*/5`). 매 tick 은 claim → (있으면) 검증·보고 → 종료. 중복 선점은 서버 SKIP LOCKED·heartbeat 로 막히니 여러 TESTER 를 동시에 돌려도 안전합니다.
 
 ## 1. 무엇을 / 언제
 
