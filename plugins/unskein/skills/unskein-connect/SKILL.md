@@ -18,7 +18,7 @@ description: 모리 클라이언트(WSL)를 UnSkein 서버에 연결한다 — c
 - WSL 안에 `git` 이 있는지 확인합니다. 없으면 설치를 안내하고 멈춥니다.
 - WSL 안에 `gh`(GitHub CLI)가 있고 인증돼 있는지 확인합니다(`gh auth status`). 다오가 마감 단계(`unskein-git`)에서 **PR 을 만들기** 때문입니다.
   - 없으면 설치를 안내합니다. sudo 가 없으면 공식 릴리스 바이너리를 `~/.local/bin` 에 풀어 넣습니다(gcloud 와 같은 무-sudo 방식): `cli/cli` 최신 릴리스의 `gh_*_linux_amd64.tar.gz` 를 받아 `bin/gh` 를 `~/.local/bin/gh` 로.
-  - 인증: `gh auth login`(mupaistudio 계정, GitHub.com·HTTPS) → `gh auth setup-git`(이후 push 도 gh 자격증명으로 일원화).
+  - 인증 — 두 길 중 하나: **(a) `GH_TOKEN`(§2, PAT)을 env 파일에** 넣으면 `gh` 가 그걸 읽어 `gh auth login`·`setup-git` 을 **생략**할 수 있습니다(clone/push 는 오케스트레이터 askpass 가 `UNSKEIN_GIT_TOKEN` 으로 하므로 `setup-git` 불필요). **(b)** 또는 `gh auth login`(mupaistudio 계정, GitHub.com·HTTPS) → `gh auth setup-git`.
   - `gh` 가 없거나 미인증이면 PR 생성이 안 됩니다. **모리는 작업을 잡기(claim) 전 preflight 에서 gh 인증을 치명 항목으로 점검하므로, 미설치·미인증이면 작업을 잡지 않고 종료하며 이 셋업을 요구합니다**(fallback 금지). 그러니 여기서 반드시 갖춰 두세요. (preflight 통과 후 세션 도중 gh 가 깨진 드문 경우엔, `unskein-git` 이 브랜치 push 까지만 하고 PR 은 사람에게 회수하는 2차 안전망이 있습니다.)
 
 ## 2. 연결 정보 설정
@@ -45,6 +45,8 @@ description: 모리 클라이언트(WSL)를 UnSkein 서버에 연결한다 — c
 > chmod 600 ~/.unskein/env.test    # 편집기로 UNSKEIN_MORI_TOKEN 채우기 (셸 인자로 넣지 말 것)
 > ```
 > 값은 화면·셸 기록에 남기지 않도록 **편집기로 직접** 입력합니다. 두 타겟을 다 쓰면 `env.local` 로도 같은 복사를 반복합니다.
+>
+> **이 env 파일 하나가 모든 인증을 담습니다** — 서버(모리 토큰) 외에 git(`UNSKEIN_GIT_TOKEN` + `GH_TOKEN`) · (선택)`ANTHROPIC_API_KEY`(채우면 다오 claude 로그인 생략, API 과금) · (선택)`UNSKEIN_SUDO_PASSWORD`(초기 프로비저닝 sudo) 도 여기에. **git 토큰 값 배치는 `unskein-add-site`(§2)가 이 파일에 채웁니다.** sudo 비번은 프로비저닝 전용이라 `build_git_env` 가 다오 env 에서 strip 하므로 이 파일에 담아도 다오엔 안 샙니다.
 
 토큰·주소는 화면에 다시 출력하지 않습니다. 값이 빠지면 임의로 채우지 말고 사용자에게 물어 멈춥니다.
 
