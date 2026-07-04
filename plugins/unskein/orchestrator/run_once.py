@@ -643,7 +643,7 @@ def preflight() -> tuple[bool, list[str]]:
     # 없거나 미인증이면 작업을 다 하고도 PR 단계에서 튕긴다 → 잡기 전에 막고 사람에게 요구한다.
     if shutil.which("gh") is None:
         check("gh CLI 인증(PR 생성)", False,
-              "PATH 에 gh 없음 — unskein-connect §1 로 설치 후 "
+              "PATH 에 gh 없음 — unskein-setup S1 로 설치 후 "
               "`gh auth login`(mupaistudio) + `gh auth setup-git`")
     else:
         gh_state = _gh_auth_state()
@@ -662,7 +662,7 @@ def preflight() -> tuple[bool, list[str]]:
     check("다오 스킬 원본(dao-skills)", os.path.isdir(DAO_SKILLS_SRC),
           f"{DAO_SKILLS_SRC} 없음 — plugin 설치 또는 UNSKEIN_DAO_SKILLS 확인")
     check("자격증명 폴더(creds)", os.path.isdir(CRED_DIR),
-          f"{CRED_DIR} 없음 — unskein-add-site 로 자격증명 배치")
+          f"{CRED_DIR} 없음 — unskein-setup 로 자격증명 배치")
     try:
         os.makedirs(WORK_ROOT, exist_ok=True)
         work_ok = os.path.isdir(WORK_ROOT)

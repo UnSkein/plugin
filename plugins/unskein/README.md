@@ -12,8 +12,7 @@
 | command | `/unskein:run` | run_once 실행 (한 바퀴) |
 | command | `/unskein:watch` | run_loop 실행 (감시 루프) |
 | command | `/unskein:status` | 연결·등록 상태 점검 |
-| skill | `unskein-connect` | 클라이언트를 서버에 연결 (claude/git 확인 + 연결 정보 + 도달 검증) |
-| skill | `unskein-add-site` | 클라이언트에 개발 대상 프로젝트 등록·자격증명 갱신 (성격 파악 + git 자격증명 배치·교체 + 접근 검증) |
+| skill | `unskein-setup` | 실행기를 한 프로젝트용으로 셋업 (서버 연결·인증 + 런타임·의존성 설치 + repo 클론 + 검증·보완, 자격증명 갱신 포함) |
 | skill | `unskein-doctor` | 연결·실행 실패 진단·복구 안내 (status 스냅샷을 출발점으로 증상 → 원인 → 복구 → 재검증) |
 | skill | `unskein-test` | 다오가 만든 화면을 CDP로 런타임 UI 검증 (CDP 설치 + start/remote/stop, 콘솔·네트워크 에러 수집·캡처) |
 | 자식 규약 문서 | `orchestrator/CONTRACT.md` | 자식이 결과·질문을 오케스트레이터가 파싱할 약속 형식으로 출력하는 규약 |
@@ -45,7 +44,7 @@
 /unskein:status
 ```
 
-서버에 처음 연결할 때는 `unskein-connect` 스킬, 개발 대상 프로젝트를 등록·갱신할 때는 `unskein-add-site` 스킬을 사용한다. 작업이 안 돌면 `unskein-doctor` 로 진단·복구하고, 다오가 만든 화면을 실제로 확인할 때는 `unskein-test` 로 CDP 검증한다.
+실행기를 한 프로젝트용으로 세울 때는 `unskein-setup` 스킬을 사용한다(서버 연결·인증·클론·검증 + 자격증명 갱신). 작업이 안 돌면 `unskein-doctor` 로 진단·복구하고, 다오가 만든 화면을 실제로 확인할 때는 `unskein-test` 로 CDP 검증한다.
 
 작업 다오(다오wsl)에 어떤 단계 스킬이 있고 언제 쓰는지는 [`DAO-SKILLS.md`](DAO-SKILLS.md) 카탈로그를 참조한다.
 

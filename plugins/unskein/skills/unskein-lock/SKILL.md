@@ -13,7 +13,7 @@ description: >-
 
 # UnSkein — 작업 점유·락 관리 (release / lock)
 
-먼저 `unskein-connect` 로 서버 연결(`UNSKEIN_API`·`UNSKEIN_MORI_TOKEN`)이 돼 있어야 합니다.
+먼저 `unskein-setup` 으로 서버 연결(`UNSKEIN_API`·`UNSKEIN_MORI_TOKEN`)이 돼 있어야 합니다.
 
 점유·동결과 상태(status)는 **직교**합니다 — 이 스킬은 점유 깃발(`claimed_by`)과 동결 깃발
 (`locked_by`)만 다루고 `status`(plan/exec/test/inspect…)는 절대 바꾸지 않습니다. status 를
