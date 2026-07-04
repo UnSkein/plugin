@@ -48,7 +48,7 @@ def _check_token() -> str:
     # 값은 절대 출력하지 않는다 — 설정됨/없음만.
     if os.getenv("UNSKEIN_MORI_TOKEN"):
         return "[OK] UNSKEIN_MORI_TOKEN: 설정됨"
-    return "[없음] UNSKEIN_MORI_TOKEN: 없음 (unskein-connect 로 설정하세요)"
+    return "[없음] UNSKEIN_MORI_TOKEN: 없음 (unskein-setup 로 설정하세요)"
 
 
 def _check_watch() -> str:
@@ -62,7 +62,7 @@ def _check_watch() -> str:
 def _check_scope() -> str:
     # 읽기 전용 — GET /api/mori/scope. 가용 비즈니스/프로젝트 표시 + watch 대상 검증.
     if not os.getenv("UNSKEIN_MORI_TOKEN"):
-        return "[건너뜀] watch 대상 검증: 토큰 없음 (unskein-connect 먼저)"
+        return "[건너뜀] watch 대상 검증: 토큰 없음 (unskein-setup 먼저)"
     url = f"{API_BASE}/api/mori/scope"
     req = urllib.request.Request(
         url, method="GET", headers={"X-Mori-Token": os.environ["UNSKEIN_MORI_TOKEN"]}
