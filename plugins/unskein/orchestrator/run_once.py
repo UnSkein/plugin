@@ -361,6 +361,7 @@ def build_git_env(repo_url: str) -> dict:
     """
     env = os.environ.copy()  # PATH/HOME/ANTHROPIC 인증 보존 (빈 dict 금지)
     env.pop("UNSKEIN_MORI_TOKEN", None)  # 표적 비밀 축소: 자식 다오는 모리 API 토큰 불필요
+    env.pop("UNSKEIN_SUDO_PASSWORD", None)  # 프로비저닝 전용 — 자식 다오는 sudo 불필요(단일 .env 담아도 안 샘)
     env["GIT_TERMINAL_PROMPT"] = "0"
 
     scheme = detect_scheme(repo_url)
