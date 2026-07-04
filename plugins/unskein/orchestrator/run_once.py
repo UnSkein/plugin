@@ -749,8 +749,9 @@ STAGE_INSTRUCTIONS = {
     # plan = 첫 구현 단계(스콥 게이트 — ADR-0009). 사람이 attach_plan 으로 수용 기준을
     # 확정해 실행대기로 올린 작업이라, 다오는 스콥을 다시 하지 않고 곧장 구현한다.
     "plan": (
-        "이번 단계: 구현. 먼저 unskein-wiki-search 로 기존 지식을 확인하고, "
-        "unskein-exec 로 주입된 구현 사양(수용 기준)을 최소·수술적으로 구현하라. "
+        "이번 단계: 구현+자체검증. 먼저 unskein-wiki-search 로 기존 지식을 확인하고, "
+        "unskein-exec 로 주입된 구현 사양(수용 기준)을 최소·수술적으로 구현한 뒤, "
+        "unskein-verify 로 타입체크·빌드·테스트로 자체검증하라(화면검증은 별도 TESTER 담당). "
         "이 단계에서는 커밋·push 하지 않는다(마감 단계에서만)."
     ),
     # exec 는 은퇴된 레거시 단계 — 이미 exec 로 들어간 작업의 드레인용으로만 남긴다
@@ -800,6 +801,14 @@ def build_prompt(task: dict) -> str:
         plan_doc = task.get("plan_doc")
         if plan_doc:
             prior = f"\n구현 사양(수용 기준):\n{plan_doc}\n"
+        # 화면검증 FAIL 롤백(test→plan)으로 되돌아온 재작업이면, 이전 화면검증 실패 근거를
+        # 실어 무엇을 고쳐야 하는지 알린다(payload['test'].verdict==FAIL). TESTER 결과 슬롯.
+        test_res = (task.get("payload") or {}).get("test") or {}
+        if test_res.get("verdict") == "FAIL":
+            fs = test_res.get("findings") or []
+            lines = [f"- [{f.get('severity', '')}] {f.get('summary', '')}" for f in fs]
+            detail = "\n".join(lines) if lines else (test_res.get("report_path") or "근거 미기재")
+            prior += f"\n이전 화면검증 실패(고쳐야 함):\n{detail}\n"
     elif status == "inspect":
         result_doc = task.get("result_doc")
         if result_doc:
