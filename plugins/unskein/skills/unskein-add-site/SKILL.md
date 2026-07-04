@@ -18,7 +18,7 @@ description: 모리 클라이언트에 새 개발 대상 프로젝트(사이트)
 ## 2. git 정보·자격증명 받기
 
 - 저장소 주소를 받고 전송 방식을 판정합니다: `https://` → 토큰, `git@`/`ssh://` → SSH 개인키.
-- 자격증명은 **`unskein-connect` 가 만든 단일 env 파일(`~/.unskein/env.<타겟>`)** 에 둡니다(서버 토큰과 한 파일):
+- 자격증명은 **`unskein-connect` 가 만든 단일 env 파일(`~/.unskein/executor.env`)** 에 둡니다(서버 토큰과 한 파일):
   - HTTPS: 개인 액세스 토큰을 **env 파일의 `UNSKEIN_GIT_TOKEN=`** 에 둡니다(오케스트레이터가 env 를 `creds/.env` 보다 우선하므로 별도 `creds/.env` 는 두지 않습니다 — 있으면 지워 혼선 방지). `gh pr create` 용 **`GH_TOKEN=`** 도 같은 PAT 로 채우면 `gh auth login` 을 생략할 수 있습니다. 호스트가 여럿이면 `UNSKEIN_GIT_TOKEN_<HOST>=` 로 구분합니다.
   - SSH: 개인키는 파일이라 `UNSKEIN_CRED_DIR`(기본 `~/.unskein/creds`)의 `id_ed25519`(또는 `id_rsa`)에 두고 권한을 `600` 으로 맞춥니다. 커스텀 이름이면 env 파일에 `UNSKEIN_SSH_KEY=<경로>`(경로만 — 키 내용은 파일).
 - 토큰·키는 화면에 다시 출력하지 않습니다. 저장소 주소나 git 설정에 토큰을 넣지 않습니다.
@@ -46,7 +46,7 @@ description: 모리 클라이언트에 새 개발 대상 프로젝트(사이트)
 
 ### 토큰 회전
 
-- env 파일(`~/.unskein/env.<타겟>`)의 `UNSKEIN_GIT_TOKEN=`(또는 `UNSKEIN_GIT_TOKEN_<HOST>=`, 필요 시 `GH_TOKEN=`) 값을 편집기로 새 토큰으로 교체합니다. 명령줄 인자로 입력하지 않습니다(셸 기록에 값이 남습니다).
+- env 파일(`~/.unskein/executor.env`)의 `UNSKEIN_GIT_TOKEN=`(또는 `UNSKEIN_GIT_TOKEN_<HOST>=`, 필요 시 `GH_TOKEN=`) 값을 편집기로 새 토큰으로 교체합니다. 명령줄 인자로 입력하지 않습니다(셸 기록에 값이 남습니다).
 - 교체 후 옛 토큰은 발급처(예: GitHub)에서 폐기하도록 사용자에게 안내합니다. 폐기하지 않으면 노출된 토큰이 계속 살아 있습니다.
 - 토큰 값은 화면에 출력하지 않습니다. 설정 여부만 "설정됨 / 없음" 으로 알립니다.
 
@@ -62,6 +62,6 @@ description: 모리 클라이언트에 새 개발 대상 프로젝트(사이트)
 
 ### 갱신 후 재검증
 
-- 교체·추가한 자격증명이 실제로 동작하는지 확인합니다 — HTTPS 토큰은 오케스트레이터 askpass 경로로만 쓰이므로 `/unskein:run`(실클론) 또는 §3 프로비저닝으로 확정합니다(맨손 `git ls-remote` 는 env 토큰을 안 탈 수 있음). SSH 키는 `source ~/.unskein/env.<타겟>` 후 `git ls-remote <repo>` 로 확인.
+- 교체·추가한 자격증명이 실제로 동작하는지 확인합니다 — HTTPS 토큰은 오케스트레이터 askpass 경로로만 쓰이므로 `/unskein:run`(실클론) 또는 §3 프로비저닝으로 확정합니다(맨손 `git ls-remote` 는 env 토큰을 안 탈 수 있음). SSH 키는 `source ~/.unskein/executor.env` 후 `git ls-remote <repo>` 로 확인.
 - 성공하면 갱신 완료를 알립니다. 토큰을 회전한 경우 옛 토큰 폐기 안내를 다시 확인합니다.
 - 실패하면 사유(인증·네트워크·주소 형식)를 그대로 보여주고 멈춥니다. 다른 값으로 우회하지 않습니다.

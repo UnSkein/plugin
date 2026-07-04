@@ -37,14 +37,14 @@ description: 모리 클라이언트(WSL)를 UnSkein 서버에 연결한다 — c
 - `UNSKEIN_API` — 위 표에서 고른 작업 큐 주소.
 - `UNSKEIN_MORI_TOKEN` — 그 서버에서 **kind=mori** 로 발급한 연결 토큰(UnSkein 설정 화면). EXECUTOR(claim)용이라 kind=mori 다 — 운영자 등록용 kind=planner 토큰(`~/.unskein/planner.env`, `플래너-설치.md` §4)과 다른 토큰이니 섞지 마세요(ADR-0013).
 
-한 머신이 두 타겟을 오가면, 짝(API+토큰)을 **통째로** 담은 env 파일을 타겟별로 둡니다 — `~/.unskein/env.local`(로컬) / `~/.unskein/env.test`(테스트 서버). watch·run 전에 그 파일을 `source` 해서 해당 타겟의 API+토큰을 한꺼번에 잡습니다. 셸 프로필에는 **상시 쓰는 한 타겟만** 두고 나머지는 env 파일로 분리해, 스테일한 기본값이 조용히 따라붙지 않게 합니다.
+이 설정은 **`~/.unskein/executor.env`**(역할 기반 이름 — `planner.env` 와 짝, `.test` 같은 혼동 없는 이름) 하나에 담고, watch·run 전에 그 파일을 `source` 합니다. 여러 서버를 오가면(드묾 — 도그푸드 등) `~/.unskein/executor.local.env` 처럼 파일만 나눠 **한 번에 하나만** source 합니다 — API+토큰은 한 서버에 묶인 짝이라 섞이면 401. 셸 프로필에 스테일한 기본값이 조용히 따라붙지 않게 파일로 분리합니다.
 
 > **템플릿에서 생성** — 플러그인에 커밋된 `templates/executor.env.sample`(비밀 없음)을 타겟 파일로 복사해 값만 채웁니다(권한 600, ADR-0013):
 > ```shell
-> cp "${CLAUDE_PLUGIN_ROOT}/templates/executor.env.sample" ~/.unskein/env.test
-> chmod 600 ~/.unskein/env.test    # 편집기로 UNSKEIN_MORI_TOKEN 채우기 (셸 인자로 넣지 말 것)
+> cp "${CLAUDE_PLUGIN_ROOT}/templates/executor.env.sample" ~/.unskein/executor.env
+> chmod 600 ~/.unskein/executor.env    # 편집기로 인증값 채우기 (셸 인자로 넣지 말 것)
 > ```
-> 값은 화면·셸 기록에 남기지 않도록 **편집기로 직접** 입력합니다. 두 타겟을 다 쓰면 `env.local` 로도 같은 복사를 반복합니다.
+> 값은 화면·셸 기록에 남기지 않도록 **편집기로 직접** 입력합니다.
 >
 > **이 env 파일 하나가 모든 인증을 담습니다** — 서버(모리 토큰) 외에 git(`UNSKEIN_GIT_TOKEN` + `GH_TOKEN`) · (선택)`ANTHROPIC_API_KEY`(채우면 다오 claude 로그인 생략, API 과금) · (선택)`UNSKEIN_SUDO_PASSWORD`(초기 프로비저닝 sudo) 도 여기에. **git 토큰 값 배치는 `unskein-add-site`(§2)가 이 파일에 채웁니다.** sudo 비번은 프로비저닝 전용이라 `build_git_env` 가 다오 env 에서 strip 하므로 이 파일에 담아도 다오엔 안 샙니다.
 
