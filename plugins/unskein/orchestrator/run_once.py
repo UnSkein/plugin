@@ -53,6 +53,13 @@ GC_GRACE_SECONDS = int(os.getenv("UNSKEIN_GC_GRACE", "3600"))
 WATCH_BUSINESS = os.getenv("UNSKEIN_WATCH_BUSINESS") or None
 WATCH_PROJECT = os.getenv("UNSKEIN_WATCH_PROJECT") or None
 
+# EXECUTOR opt-in(ADR-0016) — 켜면 이 클라이언트가 test 도 집어 코드검증(unskein-verify)을
+# pre-merge 로 돌리고 통과 시 inspect 로 잇는다(화면검증 TESTER 는 배포 후 별개). claim 에
+# auto_advance_test=True 로 실린다. 기본 off — 진짜 프로덕션은 꺼서 사람 리뷰 게이트를 유지한다.
+AUTO_ADVANCE_TEST = (os.getenv("UNSKEIN_AUTO_ADVANCE_TEST") or "").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+
 # watch 대상 키워드(인자/명령줄에서 인식). 짧은형(bis/prj)·풀네임·플래그·key=value 모두 허용.
 _WATCH_BIZ_KEYS = {"business", "bis", "--business", "-b"}
 _WATCH_PRJ_KEYS = {"project", "prj", "--project", "-p"}
@@ -516,6 +523,8 @@ def _claim_body() -> dict:
         body["business"] = WATCH_BUSINESS
     if WATCH_PROJECT:
         body["project"] = WATCH_PROJECT
+    if AUTO_ADVANCE_TEST:
+        body["auto_advance_test"] = True
     return body
 
 
