@@ -37,9 +37,12 @@ description: >-
 | `locked_by` | 사람이 자동 claim 에서 빼려고 꽂는 **별개 직교 축**. 만료 없음. | claim 후보 쿼리가 `locked_by IS NULL` 을 거른다 → 동결되면 자동 선점에서 빠짐. |
 
 - **release(해제)** = 죽은 점유를 즉시 푼다. `claimed_by`·`claimed_at`·`heartbeat_at`·
-  `executed_by`·`locked_by` 를 비운다(status 보존). 특히 **죽은 자손의 잔존 `claimed_by` 가
-  부모 단위 claim 을 영구 차단**하는 것(heartbeat 와 무관, 자동 복구 없음)을 푼다.
-  release 가 **unlock 을 겸한다**.
+  `executed_by`·`locked_by` 를 비운다(status 보존). release 가 **unlock 을 겸한다**.
+  죽은 자손의 잔존 `claimed_by` 는 **ADR-0015 이후** `_subtree_claimable` 이 heartbeat-aware 라
+  `CLAIM_STALE_SECONDS`(180s) 만료 후 부모 단위 claim 을 **자동으로 안 막는다**(후보 쿼리와 같은
+  self-heal — 더는 '영구 차단·자동 복구 없음'이 아니다). release 는 그 180s 를 안 기다리는 **즉시
+  override** 로 남는다 — 살아있는(heartbeat 신선)·턴 사이(NULL)·동결(`locked_by`) 자손까지 강제로
+  풀어야 할 때 쓴다.
 - **lock(동결)** = `locked_by` 를 꽂아 모리가 못 잡게 한다(status 보존). 사람이 release 로
   풀 때까지 유지(heartbeat staleness 무관 — 만료 없음).
 
