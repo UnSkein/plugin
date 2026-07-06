@@ -60,7 +60,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/orchestrator/status.py"
 | 5 | "다오 스킬 원본을 찾을 수 없습니다" 로 회수됨 | dao-skills 원본 누락(plugin 설치·갱신 문제) | `/plugin` 재설치 |
 | 6 | `claude -p` 가 timeout / is_error / JSON 파싱 실패로 회수됨 | 실행 시간 초과 / claude 내부 오류 / 출력 비정상 | 아래 6번에서 원인 분기 후 확인 |
 | 7 | 서버 도달 실패(`GET /api/health`) | 네트워크·주소 문제 | 주소·네트워크 확인 |
-| 8 | 화면 검증(CDP)이 Chrome(9222)에 안 붙음 | WSL Node 로 실행해 `127.0.0.1` 이 WSL 루프백을 가리킴 / Chrome 미기동 | 윈도우 Node·PowerShell 로 실행 (`unskein-test` 6장) |
+| 8 | 화면 검증(CDP)이 Chrome(기본 9222)에 안 붙음 | WSL Node 로 실행해 `127.0.0.1` 이 WSL 루프백을 가리킴 / 포트 불일치(병렬 세션 — `--port`/`CDP_PORT` 확인) / Chrome 미기동 | 윈도우 Node·PowerShell 로 실행 + 포트 대조 (`unskein-test` 6장) |
 | 9 | 모리·다오가 규약과 다르게 동작(출력 형식 어김, 엉뚱한 지침·스킬을 따름) | 기존 전역 스킬·`CLAUDE.md`·플러그인이 unskein 과 충돌 | 아래 9번에서 충돌 점검 |
 | 10 | 작업을 하나도 못 잡고 preflight 가 `[실패] gh CLI 인증(PR 생성)` 으로 종료(claim 안 함) | gh 미설치·미인증·토큰 무효 | 아래 10번 — `unskein-setup` S1 로 `gh auth login` + `gh auth setup-git` |
 
@@ -151,19 +151,21 @@ curl -s "${UNSKEIN_API:-https://unskein.mupai.studio}/api/health"
 
 복구: 주소 오타면 `unskein-setup` S1로 `UNSKEIN_API` 를 바로잡습니다. 네트워크 문제면 사유(타임아웃·DNS 등)를 사용자에게 그대로 보여주고, 네트워크가 회복되면 다시 확인합니다.
 
-### 8. 화면 검증이 Chrome(9222)에 안 붙음
+### 8. 화면 검증이 CDP Chrome(기본 9222)에 안 붙음
 
-화면 런타임 검증은 `unskein-test` 스킬이 담당합니다. 그 검증이 "CDP 연결 실패" 로 멈추면 두 가지를 봅니다.
+화면 런타임 검증은 `unskein-test` 스킬이 담당합니다. 그 검증이 "CDP 연결 실패" 로 멈추면 세 가지를 봅니다.
 
-첫째, 가장 흔한 원인은 실행 위치입니다. `remote.js` 는 **윈도우 Node** 로, `start.ps1`/`stop.ps1` 은 **PowerShell** 로 호출해야 `127.0.0.1:9222` 가 윈도우 로컬을 가리킵니다. WSL 안의 Node 로 `remote.js` 를 실행하면 `127.0.0.1` 이 WSL 루프백이 되어 윈도우에 떠 있는 Chrome(9222)에 닿지 못합니다. 모리 운영 세션이 WSL 안에서 돌고 있다면 이 갈래를 먼저 의심합니다.
+첫째, 가장 흔한 원인은 실행 위치입니다. `remote.js` 는 **윈도우 Node** 로, `start.ps1`/`stop.ps1` 은 **PowerShell** 로 호출해야 `127.0.0.1:<포트>` 가 윈도우 로컬을 가리킵니다. WSL 안의 Node 로 `remote.js` 를 실행하면 `127.0.0.1` 이 WSL 루프백이 되어 윈도우에 떠 있는 CDP Chrome 에 닿지 못합니다. 모리 운영 세션이 WSL 안에서 돌고 있다면 이 갈래를 먼저 의심합니다.
 
-둘째, Chrome 자체가 9222 에 안 떠 있을 수 있습니다. 윈도우에서 기동 상태를 확인합니다(윈도우 PowerShell 에서):
+둘째, **포트 불일치**(병렬 세션): `start.ps1 -Port <n>` 로 띄웠는데 `remote.js` 가 기본 9222 로 붙고 있으면 연결이 안 됩니다. 에러 메시지의 포트와 띄운 포트를 대조하고, `--port=<n>` 또는 `CDP_PORT=<n>` 로 맞춥니다(포트↔프로필 1:1 — `unskein-test` §3).
+
+셋째, Chrome 자체가 그 포트에 안 떠 있을 수 있습니다. 윈도우에서 기동 상태를 확인합니다(윈도우 PowerShell 에서):
 
 ```shell
 powershell.exe -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/skills/unskein-test/scripts/start.ps1"
 ```
 
-복구: `unskein-test` 6장(실환경 검증 필요)의 안내대로 윈도우 Node·PowerShell 경로로 다시 실행합니다. 9222 가 안 떠 있으면 위 `start.ps1` 로 띄우고 `READY` 출력과 엔드포인트(`http://127.0.0.1:9222`)를 확인합니다. WSL 자체 확인만으로는 9222 도달을 보장하지 못하므로, 이 갈래는 윈도우 실환경에서 확인합니다.
+복구: `unskein-test` 6장(실환경 검증 필요)의 안내대로 윈도우 Node·PowerShell 경로로 다시 실행합니다. 그 포트가 안 떠 있으면 위 `start.ps1`(병렬 세션은 `-Port <n>`)로 띄우고 `READY` 출력과 엔드포인트(`http://127.0.0.1:<포트>`)를 확인합니다. "profile is already used by another Chrome" 거부가 뜨면 같은 프로필을 다른 포트로 두 번 띄운 것 — 그 세션의 포트를 쓰거나 `stop.ps1 -Port/-Profile` 로 먼저 정리합니다. WSL 자체 확인만으로는 포트 도달을 보장하지 못하므로, 이 갈래는 윈도우 실환경에서 확인합니다.
 
 ### 9. 기존 환경 충돌 (전역 스킬·CLAUDE.md·플러그인)
 
@@ -212,7 +214,7 @@ command -v gh && gh auth status
 
 - 1·4·5·7·10번: `/unskein:status` 를 다시 돌려 해당 항목이 `OK` 로 바뀌었는지 확인합니다.
 - 2·3·6번: `/unskein:run` 한 바퀴를 실제로 돌려 claim·clone·push·회수까지 진행되는지 확인합니다.
-- 8번: 윈도우에서 `start.ps1` 의 `READY` 출력과 `remote.js tabs` 응답으로 Chrome(9222) 연결이 되는지 확인합니다.
+- 8번: 윈도우에서 `start.ps1` 의 `READY` 출력과 `remote.js tabs` 응답으로 CDP Chrome 연결이 되는지 확인합니다(병렬 세션은 그 포트로 — `start.ps1 -Port <n>` + `remote.js tabs --port=<n>`).
 - 9번: 충돌을 정리한 뒤 `/unskein:run` 한 바퀴가 규약(`RESULT:`/`QUESTION:`)대로 회수되는지 확인합니다.
 
 증상이 사라지면 복구 완료를 알리고, 연속 처리는 `/unskein:watch` 로 안내합니다.
