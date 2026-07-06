@@ -2,8 +2,13 @@
 /**
  * UnSkein mori - CDP/Playwright 즉석 조작 CLI.
  *
- * 전제: scripts/start.ps1 로 Chrome이 9222 포트에 떠 있어야 함.
+ * 전제: scripts/start.ps1 로 Chrome이 CDP 포트에 떠 있어야 함 (기본 9222).
  *       playwright 패키지가 node_modules 에 있어야 함 (walk-up 발견).
+ *
+ * 포트 (병렬 세션 — 포트↔프로필 1:1, start.ps1 -Port 와 짝):
+ *   --port=<n>          이 호출만 그 포트로 (모든 명령에 공통)
+ *   CDP_PORT=<n>        세션 환경변수로 고정 (플래그가 우선)
+ *   기본                9222
  *
  * 사용:
  *   node remote.js tabs
@@ -52,11 +57,24 @@ function positional() {
     return argv.filter(a => !a.startsWith('--'));
 }
 
+// CDP 포트 — --port 플래그 > CDP_PORT env > 9222. start.ps1 -Port 와 1:1 짝.
+// 검증은 엄격하게(fallback 금지): 지정했는데 이상한 값이면 조용히 9222 로 붙지 않고 죽는다
+// — 오타로 다른 세션의 크롬에 붙으면 인증 격리가 소리 없이 깨지기 때문.
+const CDP_PORT = (() => {
+    const flagGiven = argv.some(a => a.startsWith('--port='));
+    const raw = flagGiven ? getOpt('port', '') : (process.env.CDP_PORT ?? '9222');
+    if (!/^\d+$/.test(raw) || +raw <= 0 || +raw > 65535) {
+        console.error(`[ERR] 잘못된 CDP 포트: ${JSON.stringify(raw)} (${flagGiven ? '--port 플래그' : 'CDP_PORT env'})`);
+        process.exit(2);
+    }
+    return +raw;
+})();
+
 async function getBrowser() {
     try {
-        return await chromium.connectOverCDP('http://127.0.0.1:9222');
+        return await chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
     } catch (e) {
-        console.error('[ERR] CDP 연결 실패. start.ps1 먼저 실행하세요.');
+        console.error(`[ERR] CDP 연결 실패 (포트 ${CDP_PORT}). start.ps1${CDP_PORT === 9222 ? '' : ` -Port ${CDP_PORT}`} 먼저 실행하세요.`);
         console.error(`     ${e.message}`);
         process.exit(1);
     }
@@ -262,7 +280,10 @@ const COMMANDS = {
 
 (async () => {
     if (!cmd || cmd === '-h' || cmd === '--help' || !COMMANDS[cmd]) {
-        console.log(fs.readFileSync(__filename, 'utf8').split('\n').slice(1, 30).join('\n'));
+        // 헤더 주석 전체를 닫는 '*/' 까지 동적으로 출력 — 헤더가 늘어도 안 잘린다.
+        const lines = fs.readFileSync(__filename, 'utf8').split('\n');
+        const end = lines.findIndex(l => l.trim() === '*/');
+        console.log(lines.slice(1, end === -1 ? 30 : end).join('\n'));
         process.exit(cmd ? 1 : 0);
     }
 
