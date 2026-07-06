@@ -29,8 +29,9 @@
 | `UNSKEIN_MORI_TOKEN` | (필수) UnSkein 설정 화면에서 발급 | 모리 연결 토큰 |
 | `UNSKEIN_CLAUDE_TIMEOUT` | `600` | `claude -p` 실행 타임아웃(초) |
 | `UNSKEIN_GIT_TOKEN` | (HTTPS repo 시 필수) | git 클론·push 토큰. 호스트별 `UNSKEIN_GIT_TOKEN_<HOST>` 도 지원. 없으면 `creds/.env` 파싱 |
-| `UNSKEIN_CRED_DIR` | `~/.unskein/creds` | 자격증명 폴더 (SSH 키 `id_ed25519`/`id_rsa`, `known_hosts`, `.env`, askpass 스크립트) |
-| `UNSKEIN_WORK_ROOT` | `~/.unskein/work` | 다오가 repo 를 클론·작업하는 폴더 |
+| `UNSKEIN_HOME` | `~/.unskein` | **상태 루트** — creds·work 가 이 밑으로 파생된다. 한 머신 다중 프로젝트면 프로젝트마다 `<프로젝트>/.unskein` 으로 상태를 통째 격리(ADR-0020). 빈 값·`~`·상대경로는 정규화 |
+| `UNSKEIN_CRED_DIR` | `$UNSKEIN_HOME/creds` | 자격증명 폴더 (SSH 키 `id_ed25519`/`id_rsa`, `known_hosts`, `.env`, askpass 스크립트). 개별 재정의는 상태 분산 위험 — preflight 가 정합을 점검 |
+| `UNSKEIN_WORK_ROOT` | `$UNSKEIN_HOME/work` | 다오가 repo 를 클론·작업하는 폴더. 개별 재정의는 상태 분산 위험 — preflight 가 정합을 점검 |
 | `UNSKEIN_LOOP_INTERVAL` | `30` | (watch) 빈 폴링 시 대기 초 |
 | `UNSKEIN_LOOP_MAX_EMPTY` | `0` | (watch) 연속 빈 폴링 N회 후 종료, 0=무한 |
 
@@ -44,7 +45,7 @@
 /unskein:status
 ```
 
-실행기를 한 프로젝트용으로 세울 때는 `unskein-setup` 스킬을 사용한다(서버 연결·인증·클론·검증 + 자격증명 갱신). 작업이 안 돌면 `unskein-doctor` 로 진단·복구하고, 다오가 만든 화면을 실제로 확인할 때는 `unskein-test` 로 CDP 검증한다.
+실행기를 한 프로젝트용으로 세울 때는 `unskein-setup` 스킬을 사용한다(서버 연결·인증·클론·검증 + 자격증명 갱신). 한 머신에서 여러 프로젝트를 돌리려면 프로젝트 디렉토리마다 `UNSKEIN_HOME=<프로젝트>/.unskein` 으로 상태를 격리해 셋업을 반복한다(1 watch 세션 = 1 프로젝트 + 프로젝트별 mori 토큰 — `unskein-setup` S0, ADR-0020). 작업이 안 돌면 `unskein-doctor` 로 진단·복구하고, 다오가 만든 화면을 실제로 확인할 때는 `unskein-test` 로 CDP 검증한다.
 
 작업 다오(다오wsl)에 어떤 단계 스킬이 있고 언제 쓰는지는 [`DAO-SKILLS.md`](DAO-SKILLS.md) 카탈로그를 참조한다.
 

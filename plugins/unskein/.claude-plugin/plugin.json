@@ -1,7 +1,7 @@
 {
   "name": "unskein",
   "description": "모리·다오 자동 개발 시스템 실행 엔진 — UnSkein 작업 큐를 폴링해 다오를 구동하고 결과를 회수하는 오케스트레이터",
-  "version": "1.17.1",
+  "version": "1.18.0",
   "author": {
     "name": "ido",
     "email": "ido@mupai.studio"
