@@ -91,7 +91,9 @@ command -v claude; command -v git
 - `https://` 저장소 → 토큰. `creds/.env` 의 `UNSKEIN_GIT_TOKEN=`(또는 호스트별 `UNSKEIN_GIT_TOKEN_<HOST>=`). 토큰이 없거나 만료되면 clone/push 가 인증 실패합니다.
 - `git@`/`ssh://` 저장소 → SSH 개인키. `creds/id_ed25519`(또는 `id_rsa`), 권한 `600`.
 
-스냅샷 preflight 의 `자격증명 폴더(creds)` 줄로 폴더 존재를 보고, 어떤 파일이 있는지는 `ls "${UNSKEIN_CRED_DIR:-$HOME/.unskein/creds}"` 로 봅니다(`.env`/`id_ed25519`/`id_rsa`). 어떤 자격증명이 필요한지는 그 프로젝트의 저장소 주소로 정합니다.
+스냅샷 preflight 의 `자격증명 폴더(creds)` 줄로 폴더 존재를 보고, 어떤 파일이 있는지는 `ls "${UNSKEIN_CRED_DIR:-${UNSKEIN_HOME:-$HOME/.unskein}/creds}"` 로 봅니다(`.env`/`id_ed25519`/`id_rsa` — 프로젝트 격리 시 `UNSKEIN_HOME` 밑, ADR-0020). 어떤 자격증명이 필요한지는 그 프로젝트의 저장소 주소로 정합니다.
+
+프로젝트 격리(`UNSKEIN_HOME`) 배치에서 preflight 의 `상태 루트 정합(UNSKEIN_HOME)` 줄이 `[실패]` 면 **상태 분산**입니다 — 전역 셸에 남은 개별 변수(`UNSKEIN_CRED_DIR`/`UNSKEIN_WORK_ROOT`, 보통 bashrc 의 전역 env 자동 로드 잔재)가 creds/work 를 프로젝트 홈 밖으로 끌고 간 것. 복구는 그 변수(또는 bashrc 자동 로드 줄)를 제거하고 프로젝트 env 만 다시 `source` 합니다. 같은 잔재 중 SSH 키 경로(`UNSKEIN_SSH_KEY`/`UNSKEIN_SSH_KNOWN_HOSTS`)는 `SSH 자격 경로` 줄에 `[경고]` 로 뜹니다 — 의도한 외부 키(`~/.ssh` 등)가 아니면 같은 방법으로 정리합니다(방치하면 다른 프로젝트의 SSH 신원으로 조용히 clone/push 하는 누출).
 
 복구: `unskein-setup` 의 자격증명 갱신 단계로 자격증명을 재배치하거나 교체합니다(토큰 재발급, 키 교체). 토큰·키 값은 화면에 출력하지 않고, 저장소 주소나 git 설정에 토큰을 넣지 않습니다. 토큰을 교체한 경우 옛 토큰을 발급처에서 폐기하도록 안내합니다.
 
@@ -100,13 +102,13 @@ command -v claude; command -v git
 진단: 스냅샷 preflight 의 `작업 루트(work)` 줄이 `[실패]` 면 작업 폴더 문제입니다(preflight 가 `exist_ok` 로 생성을 시도하므로, 실패는 보통 권한 문제입니다). 작업 루트의 소유자·권한을 직접 봅니다:
 
 ```shell
-ls -ld "${UNSKEIN_WORK_ROOT:-$HOME/.unskein/work}"
+ls -ld "${UNSKEIN_WORK_ROOT:-${UNSKEIN_HOME:-$HOME/.unskein}/work}"
 ```
 
 복구: 폴더를 만들고 권한을 보정합니다.
 
 ```shell
-mkdir -p "${UNSKEIN_WORK_ROOT:-$HOME/.unskein/work}"
+mkdir -p "${UNSKEIN_WORK_ROOT:-${UNSKEIN_HOME:-$HOME/.unskein}/work}"
 ```
 
 권한 오류가 남으면 폴더 소유자·권한을 사용자에게 보여주고 어떻게 보정할지 함께 정합니다. 임의로 광범위한 권한을 부여하지 않습니다.

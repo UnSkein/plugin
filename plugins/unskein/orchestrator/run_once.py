@@ -112,26 +112,36 @@ def apply_watch_args(business: str | None, project: str | None) -> None:
     if project is not None:
         WATCH_PROJECT = project or None
 
-# 자격증명(SSH 키 / 토큰 / known_hosts)을 모아두는 폴더. 부모 환경 또는 기본 ~/.unskein/creds.
-CRED_DIR = os.getenv(
-    "UNSKEIN_CRED_DIR", os.path.expanduser(os.path.join("~", ".unskein", "creds"))
-)
-# 다오가 repo 를 클론·작업하는 작업 폴더. 기본 ~/.unskein/work.
-WORK_ROOT = os.getenv(
-    "UNSKEIN_WORK_ROOT", os.path.expanduser(os.path.join("~", ".unskein", "work"))
-)
+def _env_path(name: str, default: str) -> str:
+    """경로 env 를 읽는다 — 빈 값은 미설정 취급(기본값 사용), '~'·상대경로는 절대경로로
+    정규화한다. source 실수(빈 export, 따옴표 틸드 "~/…", 상대경로)로 상태 폴더가
+    launch cwd 에 조용히 흩어지는 사고를 막는다(askpass 는 git -C 밑에서 실행돼
+    상대경로면 인증이 즉사한다)."""
+    raw = (os.getenv(name) or "").strip() or default
+    return os.path.abspath(os.path.expanduser(raw))
+
+
+# 실행기 상태 루트 — env·creds·work 를 통째로 격리하는 단일 변수(ADR-0020).
+# 한 머신에서 여러 프로젝트를 돌릴 때 프로젝트 디렉토리마다
+# UNSKEIN_HOME=<프로젝트>/.unskein 으로 상태를 격리한다(코드=플러그인은 전역 1벌 공유).
+# 미설정이면 종전과 동일한 전역 ~/.unskein (하위호환). 개별 변수가 여전히 우선하지만
+# 정상 배치에선 UNSKEIN_HOME 하나만 쓴다 — 부분 지정(예: 전역 WORK_ROOT 잔존)은
+# 상태가 전역/프로젝트로 갈라지는 사고라 preflight 가 정합성을 점검한다.
+UNSKEIN_HOME = _env_path("UNSKEIN_HOME", os.path.join("~", ".unskein"))
+# 자격증명(SSH 키 / 토큰 / known_hosts)을 모아두는 폴더. 부모 환경 또는 기본 $UNSKEIN_HOME/creds.
+CRED_DIR = _env_path("UNSKEIN_CRED_DIR", os.path.join(UNSKEIN_HOME, "creds"))
+# 다오가 repo 를 클론·작업하는 작업 폴더. 기본 $UNSKEIN_HOME/work.
+WORK_ROOT = _env_path("UNSKEIN_WORK_ROOT", os.path.join(UNSKEIN_HOME, "work"))
 # 다오 작업 폴더에 심을 스킬 원본(plugin 동봉). 기본은 run_once.py 기준 ../dao-skills.
 # CLAUDE.md(항상 규칙·출력 규약·단계 순서) + .claude/skills/(단계 스킬 6개)가 들어 있다.
-DAO_SKILLS_SRC = os.getenv(
+DAO_SKILLS_SRC = _env_path(
     "UNSKEIN_DAO_SKILLS",
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dao-skills"),
 )
 # SSH 개인키. 기본 CRED_DIR/id_ed25519, 없으면 id_rsa 차선 탐색.
-SSH_KEY = os.getenv("UNSKEIN_SSH_KEY", os.path.join(CRED_DIR, "id_ed25519"))
+SSH_KEY = _env_path("UNSKEIN_SSH_KEY", os.path.join(CRED_DIR, "id_ed25519"))
 # SSH known_hosts. 기본 CRED_DIR/known_hosts.
-KNOWN_HOSTS = os.getenv(
-    "UNSKEIN_SSH_KNOWN_HOSTS", os.path.join(CRED_DIR, "known_hosts")
-)
+KNOWN_HOSTS = _env_path("UNSKEIN_SSH_KNOWN_HOSTS", os.path.join(CRED_DIR, "known_hosts"))
 
 
 def _load_git_token(repo_url: str | None = None) -> str | None:
@@ -668,16 +678,56 @@ def preflight() -> tuple[bool, list[str]]:
             check("gh CLI 인증(PR 생성)", True)
 
     # 2) 필요한 것 — 다오 스킬 원본 / 자격증명 폴더 / 작업 루트.
+    # 유효 상태 경로 표시 — 다중 프로젝트(UNSKEIN_HOME 격리)에서 이 세션이 어느 홈으로
+    # 붙었는지 화면만으로 판별하게 한다(오배선이 무증상이 되는 것을 막는다, ADR-0020).
+    home_set = bool((os.getenv("UNSKEIN_HOME") or "").strip())
+    lines.append(f"  [경로] 상태 루트(UNSKEIN_HOME): {UNSKEIN_HOME}"
+                 + ("" if home_set else " (기본값)"))
+    lines.append(f"  [경로] creds: {CRED_DIR}  /  work: {WORK_ROOT}")
+    split_state = False
+    if home_set:
+        # 정합 가드 — 루트를 지정했는데 개별 변수(UNSKEIN_CRED_DIR/UNSKEIN_WORK_ROOT,
+        # 보통 전역 env 잔존)로 유효 경로가 그 밖이면 상태가 전역/프로젝트로 갈라진다
+        # (부분 재정의 사고 — 공유 WORK_ROOT 는 GC 교차 삭제까지 간다). 조용히 진행하지
+        # 않고 선점 전에 막는다(fallback 금지).
+        # 비교는 realpath — 같은 폴더를 심링크/실경로로 달리 표기해도 오탐하지 않게.
+        # 경로 비교는 POSIX(WSL) 전제(대소문자 혼용 등 윈도우 표기 차이는 미고려).
+        home_real = os.path.realpath(UNSKEIN_HOME)
+
+        def _under_home(p: str) -> bool:
+            rp = os.path.realpath(p)
+            return rp == home_real or rp.startswith(home_real + os.sep)
+
+        split = [f"{n}={p}" for n, p in (("creds", CRED_DIR), ("work", WORK_ROOT))
+                 if not _under_home(p)]
+        split_state = bool(split)
+        check("상태 루트 정합(UNSKEIN_HOME)", not split,
+              f"UNSKEIN_HOME={UNSKEIN_HOME} 밖: {'; '.join(split)} — 개별 변수"
+              "(UNSKEIN_CRED_DIR/UNSKEIN_WORK_ROOT) 잔존(전역 env 누출?)을 정리하거나, "
+              "의도한 분리면 UNSKEIN_HOME 을 빼세요")
+        # SSH 자격 경로는 의도적 외부 배치(~/.ssh 등)가 정당할 수 있어 경고만 —
+        # 전역 env 잔존으로 다른 신원의 키를 조용히 쓰는 누출을 화면에 드러낸다.
+        drift = [f"{n}={p}" for n, p in (("ssh_key", SSH_KEY), ("known_hosts", KNOWN_HOSTS))
+                 if not _under_home(p)]
+        check("SSH 자격 경로(UNSKEIN_HOME 안)", not drift,
+              f"UNSKEIN_HOME 밖: {'; '.join(drift)} — 의도한 외부 키가 아니면 "
+              "UNSKEIN_SSH_KEY/UNSKEIN_SSH_KNOWN_HOSTS 잔존(전역 env 누출?) 확인",
+              critical=False)
     check("다오 스킬 원본(dao-skills)", os.path.isdir(DAO_SKILLS_SRC),
           f"{DAO_SKILLS_SRC} 없음 — plugin 설치 또는 UNSKEIN_DAO_SKILLS 확인")
     check("자격증명 폴더(creds)", os.path.isdir(CRED_DIR),
           f"{CRED_DIR} 없음 — unskein-setup 로 자격증명 배치")
-    try:
-        os.makedirs(WORK_ROOT, exist_ok=True)
-        work_ok = os.path.isdir(WORK_ROOT)
-    except OSError:
-        work_ok = False
-    check("작업 루트(work)", work_ok, f"{WORK_ROOT} 생성 불가")
+    if split_state:
+        # 정합 실패면 홈 밖 위치에 폴더를 만들지 않는다(정리 대상만 늘림) — 존재 검사만.
+        check("작업 루트(work)", os.path.isdir(WORK_ROOT),
+              f"{WORK_ROOT} 없음(상태 루트 정합 실패로 생성 보류)")
+    else:
+        try:
+            os.makedirs(WORK_ROOT, exist_ok=True)
+            work_ok = os.path.isdir(WORK_ROOT)
+        except OSError:
+            work_ok = False
+        check("작업 루트(work)", work_ok, f"{WORK_ROOT} 생성 불가")
 
     # 3) 큐 서버 도달 — '필요한 것이 작동'에 서버 포함.
     try:
@@ -1013,8 +1063,9 @@ def guess_transcript_path(session_id: str | None, cwd: str) -> str | None:
     """claude transcript 추정 경로. ~/.claude/projects/<slug>/<session_id>.jsonl
 
     claude 는 프로젝트 디렉터리 슬러그를 만들 때 '/' 뿐 아니라 '.'·'_' 등 영숫자가
-    아닌 모든 문자를 '-' 로 치환한다(실측 확인). 기본 work_root 가 ~/.unskein/work 라
-    '.' 를 포함하므로 '/' 만 바꾸면 실제 경로와 어긋난다 — 같은 규칙으로 정규화한다.
+    아닌 모든 문자를 '-' 로 치환한다(실측 확인). 기본 work_root 가 $UNSKEIN_HOME/work
+    (기본 ~/.unskein/work)라 '.' 를 포함하므로 '/' 만 바꾸면 실제 경로와 어긋난다 —
+    같은 규칙으로 정규화한다.
     """
     if not session_id:
         return None
