@@ -81,12 +81,17 @@ DELETE /api/tasks/{id}                    노드 삭제
 ### 4.4 비밀 정보는 값 대신 위치 지칭
 - 자격증명·키는 `plan_doc`에 **값을 넣지 않고 보관 위치**를 지칭한다(예: "sa 비밀번호는 운영 메모/시스템 DB Fernet 복호화"). 자기완결 원칙의 유일한 예외.
 
-### 4.5 등록 전 참조 점검
-- 등록 직전, 참조하려는 repo 문서가 **원격 커밋에 존재하는지** 확인한다: `git log origin/main -- <path>` (대상 repo·브랜치 기준, main/master는 프로젝트에 맞춘다).
-- 없으면(미커밋·untracked) §4.2(전문 수록)로 대체하고, 원본 커밋은 후속 처리로 남긴다.
+### 4.5 등록 시 스펙 커밋 필수 — 브랜치+PR (실행기 재사용)
+등록하는 WBS의 **출처 스펙**(`docs/specs/*.md`)은 **등록 시점에 항상 feature 브랜치+PR로 커밋한다** — master/main 직커밋 금지(PR 경유). 실행기(다오)는 repo 클론 + `plan_doc`만 보므로, 스펙이 repo에 있어야 클론으로 받아 작업 맥락을 이해한다. **후속 처리로 미루지 않는다.**
+1. **원격 점검(멱등)**: `git log origin/<main> -- <spec>` 로 이미 원격에 있으면(머지됨) 커밋 단계는 skip.
+2. **격리 커밋**: 없으면 동시 세션 안전을 위해 `git worktree add -b wbs/<slug>-spec <경로> origin/<main>` 격리본에서 **그 스펙 파일만** add·commit·push 한다 (CLAUDE.md §8.1 — 공유 트리 브랜치/파일 직접 조작 금지, 다른 untracked 변경 섞지 않음). **로컬 트리가 origin보다 뒤처졌을 수 있으니 worktree 기준은 항상 `origin/<main>`**.
+3. **PR**: `gh pr create` → 저장소 기본 정책대로 자동 머지(테스트 repo) 또는 사람 머지(리뷰 게이트). 끝나면 `git worktree remove`.
+4. **이중 안전**: 커밋해도 루트 plan_doc엔 §4.2 전문을 함께 싣는다 — 클론·브랜치·머지 지연과 무관하게 자기완결 유지.
+- 대상 repo·브랜치(main/master)는 프로젝트에 맞춘다.
 
 ## 5. Create (노드 추가)
 
+0. **스펙 커밋 (§4.5) — 먼저 한다.** 이 WBS의 출처 스펙(`docs/specs/*.md`)을 origin 기준 worktree에서 feature 브랜치+PR로 커밋한다 — 실행기가 클론으로 받아 작업을 이해하도록. 미커밋 스펙으로 노드 생성 진행 금지.
 1. 대상 프로젝트의 현재 노드를 조회해 `wbs_code → id` 맵과 최대 `sort_order`를 만든다.
 2. 추가할 노드를 **위상순서(부모 먼저)** 로 정렬한다.
 3. 각 노드: 이미 같은 `wbs_code`가 있으면 skip(멱등). 없으면 `parent_id` = 부모 wbs_code의 id, `sort_order` = 증가값으로 생성. **말단이면 §4 자기완결 표준(7요소)으로 `plan_doc`을 채우고, 루트면 스콥 전문을 싣는다. `plan_start`/`plan_end`는 §6(오늘 기준·의존성 계단식)으로 계산해 함께 넣는다** — 날짜를 비우면 간트에서 오늘 열에 몰리므로 빈 날짜 금지.
