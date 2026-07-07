@@ -30,7 +30,7 @@ doctor 의 `preflight()` 는 **EXECUTOR(모리 실행기)** 가 작업을 잡기
 
 역할이 모호하면 임의 판단하지 말고 사용자에게 묻습니다. **PLANNER 전용**이면 아래 §1 스냅샷에서 executor-전용 `[실패]` 는 "해당 없음(정상)" 으로 읽고, 공통 항목만 갈래(§2)로 좁힙니다.
 
-> PLANNER 준비 확인은 별도입니다 — `UNSKEIN_PLANNER_TOKEN`(`~/.unskein/planner.env`) 또는 admin 로그인으로 등록 API(businesses·projects·tasks·plan)에 닿으면 됩니다. `플래너-설치.md` §4 · ADR-0013.
+> PLANNER 준비 확인은 별도입니다 — `UNSKEIN_PLANNER_TOKEN` + `UNSKEIN_API` 가 **프로젝트별 격리된 `planner.env`** 에서 로드돼(`. "${CLAUDE_PLUGIN_ROOT}/bin/planner-env.sh"` — source 우선·cwd 폴백, ADR-0021) 등록 API(businesses·projects·tasks·plan)에 닿으면 됩니다. 어느 파일에서 로드됐는지는 `UNSKEIN_PLANNER_ENV_FILE` 로 확인합니다(여러 프로젝트를 다룰 때 **엉뚱한 프로젝트의 planner.env 를 주웠는지** — cwd 폴백이 조상 `.unskein` 을 잡는 함정). 토큰이 안 잡히면 멈추고 알립니다(fallback 금지). 폴백: 사람이 웹 로그인 세션이면 admin 로그인 Bearer 도 인가. `플래너설치_멀티프로젝트.md`·`플래너설치_일반프로젝트.md` §4 · ADR-0013 · ADR-0021.
 
 ## 1. 스냅샷 확보
 
@@ -94,6 +94,8 @@ command -v claude; command -v git
 스냅샷 preflight 의 `자격증명 폴더(creds)` 줄로 폴더 존재를 보고, 어떤 파일이 있는지는 `ls "${UNSKEIN_CRED_DIR:-${UNSKEIN_HOME:-$HOME/.unskein}/creds}"` 로 봅니다(`.env`/`id_ed25519`/`id_rsa` — 프로젝트 격리 시 `UNSKEIN_HOME` 밑, ADR-0020). 어떤 자격증명이 필요한지는 그 프로젝트의 저장소 주소로 정합니다.
 
 프로젝트 격리(`UNSKEIN_HOME`) 배치에서 preflight 의 `상태 루트 정합(UNSKEIN_HOME)` 줄이 `[실패]` 면 **상태 분산**입니다 — 전역 셸에 남은 개별 변수(`UNSKEIN_CRED_DIR`/`UNSKEIN_WORK_ROOT`, 보통 bashrc 의 전역 env 자동 로드 잔재)가 creds/work 를 프로젝트 홈 밖으로 끌고 간 것. 복구는 그 변수(또는 bashrc 자동 로드 줄)를 제거하고 프로젝트 env 만 다시 `source` 합니다. 같은 잔재 중 SSH 키 경로(`UNSKEIN_SSH_KEY`/`UNSKEIN_SSH_KNOWN_HOSTS`)는 `SSH 자격 경로` 줄에 `[경고]` 로 뜹니다 — 의도한 외부 키(`~/.ssh` 등)가 아니면 같은 방법으로 정리합니다(방치하면 다른 프로젝트의 SSH 신원으로 조용히 clone/push 하는 누출).
+
+프로젝트 격리 배치에서 preflight 의 `전역 ~/.unskein 무력화(멀티프로젝트)` 줄이 `[경고]` 면 — 전역 `~/.unskein` 이 남아 있어 **cwd 폴백(ADR-0021)이 조상 전역을 주울 수 있는** 상태입니다. 복구: `mv ~/.unskein ~/.unskein_back` 로 개명(또는 삭제)해 무력화합니다. 또 `[경로] env 파일(cwd 폴백 로드)`(실행기)·`UNSKEIN_PLANNER_ENV_FILE`(플래너)로 **어느 파일에서 상태가 왔는지** 확인해 엉뚱한 프로젝트로 붙지 않았는지 봅니다. 여러 실행기/플래너 중 하나가 연결이 안 되거나 엉뚱하게 붙으면 대개 **셸에 이전 프로젝트 토큰이 남아 있어**(source 우선이 그걸 이김) 그런 것이니 — **새 터미널**에서 다시 시작합니다.
 
 복구: `unskein-setup` 의 자격증명 갱신 단계로 자격증명을 재배치하거나 교체합니다(토큰 재발급, 키 교체). 토큰·키 값은 화면에 출력하지 않고, 저장소 주소나 git 설정에 토큰을 넣지 않습니다. 토큰을 교체한 경우 옛 토큰을 발급처에서 폐기하도록 안내합니다.
 

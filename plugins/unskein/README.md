@@ -20,6 +20,7 @@
 | 다오 스킬 카탈로그 | `DAO-SKILLS.md` | 모리가 보는 **다오wsl 스킬 목록·용도** 참조 정보 — 다오wsl(작업 다오)에 어떤 스킬이 있고 언제 쓰는지. `dao-skills/` 의 각 `SKILL.md` 에서 자동 생성한다(직접 고치지 않는다). |
 | bin | `unskein-once`, `unskein-loop` | 셸에서 직접 실행하는 래퍼 |
 | bin | `gen-dao-catalog.py` | `dao-skills/` 에서 `DAO-SKILLS.md` 를 생성·점검(`--check`)한다. dao-skills 변경 시 다시 돌려 동기화한다. |
+| bin | `planner-env.sh` | 플래너 스킬(scope·wbs·drawio·doctor)이 `source` 하는 인증 로드 — 프로젝트별 격리 `planner.env`(source 우선·cwd 폴백, ADR-0021)에서 `UNSKEIN_API`+`UNSKEIN_PLANNER_TOKEN` 을 올린다. |
 
 ## 환경변수
 
@@ -29,7 +30,8 @@
 | `UNSKEIN_MORI_TOKEN` | (필수) UnSkein 설정 화면에서 발급 | 모리 연결 토큰 |
 | `UNSKEIN_CLAUDE_TIMEOUT` | `600` | `claude -p` 실행 타임아웃(초) |
 | `UNSKEIN_GIT_TOKEN` | (HTTPS repo 시 필수) | git 클론·push 토큰. 호스트별 `UNSKEIN_GIT_TOKEN_<HOST>` 도 지원. 없으면 `creds/.env` 파싱 |
-| `UNSKEIN_HOME` | `~/.unskein` | **상태 루트** — creds·work 가 이 밑으로 파생된다. 한 머신 다중 프로젝트면 프로젝트마다 `<프로젝트>/.unskein` 으로 상태를 통째 격리(ADR-0020). 빈 값·`~`·상대경로는 정규화 |
+| `UNSKEIN_HOME` | `~/.unskein` | **상태 루트** — EXECUTOR 는 creds·work, PLANNER 는 `planner.env` 가 이 밑으로 파생된다. 한 머신 다중 프로젝트면 프로젝트마다 `<프로젝트>/.unskein` 으로 상태를 통째 격리(ADR-0020 실행기 · ADR-0021 플래너). 빈 값·`~`·상대경로는 정규화 |
+| `UNSKEIN_PLANNER_TOKEN` | (PLANNER 필수) UnSkein 설정 화면에서 kind=planner 발급 | 플래너 등록 토큰 — `X-Planner-Token` 으로 등록 API(businesses·projects·tasks·plan) 인가. `planner.env` 에 담아 `bin/planner-env.sh` 가 로드(ADR-0013·0021). 모리 토큰과 다른 kind |
 | `UNSKEIN_CRED_DIR` | `$UNSKEIN_HOME/creds` | 자격증명 폴더 (SSH 키 `id_ed25519`/`id_rsa`, `known_hosts`, `.env`, askpass 스크립트). 개별 재정의는 상태 분산 위험 — preflight 가 정합을 점검 |
 | `UNSKEIN_WORK_ROOT` | `$UNSKEIN_HOME/work` | 다오가 repo 를 클론·작업하는 폴더. 개별 재정의는 상태 분산 위험 — preflight 가 정합을 점검 |
 | `UNSKEIN_LOOP_INTERVAL` | `30` | (watch) 빈 폴링 시 대기 초 |

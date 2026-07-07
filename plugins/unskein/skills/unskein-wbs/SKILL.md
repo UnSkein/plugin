@@ -33,14 +33,18 @@ description: WBS(작업 분해 구조) 관리 — 비즈니스/프로젝트의 W
 
 1. **대상**: 비즈니스 이름 + 프로젝트 이름(예: `MUPAI STUDIO` / `UNSKEIN_SAAS`). 이름으로 id를 조회한다(id 하드코딩 금지 — 환경마다 다르다).
 2. **환경**: `local`(개발 백엔드/DB) / `production`(`https://unskein.mupai.studio`) / 둘 다. ido 지시에 따른다.
-   - 프로덕션: **API(admin 로그인)** 가 1차 경로. gcloud로 VM 직접 접근(SSH·DB)도 가능하다(`docs/deploy.md` 접근 정보 — project `epic-framework`, gcloud 설치·인증 완료). API로 안 되는 작업(예: 새 컬럼 의존 PATCH는 backend 재배포 선행)만 VM 경로를 쓴다.
+   - 프로덕션: **API(플래너 토큰 — §3)** 가 1차 경로(사람 웹 세션이면 admin 로그인 Bearer 도 같은 유저로 인가 — §3 대안). gcloud로 VM 직접 접근(SSH·DB)도 가능하다(`docs/deploy.md` 접근 정보 — project `epic-framework`, gcloud 설치·인증 완료). API로 안 되는 작업(예: 새 컬럼 의존 PATCH는 backend 재배포 선행)만 VM 경로를 쓴다.
    - 로컬은 백엔드 API 또는 DB 직접(둘 다 가능). 일관성을 위해 가능하면 API를 쓴다.
    - 같은 변경을 양쪽에 반영할 때 **id는 환경마다 다르다** — 항상 이름+wbs_code로 조회한다.
 
 ## 3. 인증·엔드포인트 (API 경로)
 
+**인증은 플래너 토큰**(kind=planner, ADR-0013) — 서버 호출 전에 **프로젝트별 격리된 `planner.env`** 를 셸에 올린다(source 우선·cwd 폴백 — ADR-0021). 한 플래너로 여러 프로젝트를 다뤄도 프로젝트마다 토큰·서버가 안 섞인다:
+```bash
+. "${CLAUDE_PLUGIN_ROOT}/bin/planner-env.sh"   # UNSKEIN_API + UNSKEIN_PLANNER_TOKEN 로드 (안 잡히면 멈춤)
 ```
-POST /api/auth/login                      {username,password} → access_token (Bearer)
+아래 등록 라우트는 모두 `X-Planner-Token: $UNSKEIN_PLANNER_TOKEN` 로 인가된다(get_current_user_flex 7개 라우트: list_businesses·list_projects·list_tasks·create_task·update_task·attach_plan·delete_task):
+```
 GET  /api/businesses                      내 비즈니스 목록 → 이름으로 id
 GET  /api/businesses/{biz}/projects       프로젝트 목록 → 이름으로 id
 GET  /api/projects/{prj}/tasks            현 WBS(노드 전체) — wbs_code·parent_id 포함
@@ -48,6 +52,7 @@ POST /api/projects/{prj}/tasks            노드 생성 (아래 필드)
 PATCH /api/tasks/{id}                     노드 수정 (부분)
 DELETE /api/tasks/{id}                    노드 삭제
 ```
+> **대안(사람/프로덕션)**: 사람이 웹 로그인 세션으로 돌리면 `POST /api/auth/login` → Bearer 로도 같은 유저로 인가된다. 프로덕션에서 API 로 안 되는 작업(새 컬럼 의존 PATCH·DB 직접)만 §2.2 의 gcloud VM 경로를 쓴다. 토큰 kind 를 섞지 말 것(mori↔planner 섞이면 401).
 
 `POST .../tasks` 가 받는 WBS 필드: `title, description, status, position, sort_order, wbs_code, parent_id, is_milestone, progress, dependencies, plan_start, plan_end, due_dt, assignee_id, payload`. (status는 TASK_STATUSES, progress 0~100, parent_id는 같은 프로젝트만 — 위반 400.)
 
