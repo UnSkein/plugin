@@ -121,6 +121,58 @@ def _env_path(name: str, default: str) -> str:
     return os.path.abspath(os.path.expanduser(raw))
 
 
+def _load_env_file(path: str) -> None:
+    """env 파일(executor.env)을 파싱해 os.environ 에 채운다 — 이미 있는 키는 존중(source 우선).
+    'export KEY=VALUE' / 'KEY=VALUE', '#' 주석·빈 줄 무시, 값의 따옴표 strip."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                key = key.strip()
+                if key.startswith("export "):
+                    key = key[len("export "):].strip()
+                val = val.strip()
+                # 셸 `source` 와 일치시킨다(같은 파일이 source·cwd 폴백 두 경로로 로드되므로):
+                # 따옴표 값은 닫는 따옴표까지, 안 감싼 값은 ' #…' 인라인 주석을 잘라낸다.
+                if val[:1] in ('"', "'"):
+                    end = val.find(val[0], 1)
+                    val = val[1:end] if end != -1 else val[1:]
+                elif " #" in val:
+                    val = val.split(" #", 1)[0].rstrip()
+                if key and key not in os.environ:
+                    os.environ[key] = val
+    except OSError:
+        pass
+
+
+def _autoload_state_env() -> None:
+    """source 를 안 했을 때의 cwd 폴백 — cwd 에서 위로 올라가며 첫 <dir>/.unskein/executor.env
+    를 찾아 os.environ 에 올린다(ADR-0021 — 플래너 bin/planner-env.sh 와 같은 원칙:
+    source 우선·cwd 폴백). 이미 UNSKEIN_MORI_TOKEN 이 있으면 명시적 source(또는 bashrc)를
+    존중해 아무것도 안 한다. 못 찾으면 그대로 둔다(preflight 가 토큰 부재로 드러낸다).
+    주의: 전역 ~/.unskein 도 조상이면 여기서 잡히므로, 멀티프로젝트 이행 시 전역
+    ~/.unskein 은 .unskein_back 으로 무력화한다(preflight 가 점검·경고)."""
+    if (os.getenv("UNSKEIN_MORI_TOKEN") or "").strip():
+        return
+    d = os.getcwd()
+    while True:
+        cand = os.path.join(d, ".unskein", "executor.env")
+        if os.path.isfile(cand):
+            _load_env_file(cand)
+            os.environ.setdefault("UNSKEIN_ENV_FILE", cand)
+            return
+        parent = os.path.dirname(d)
+        if parent == d:
+            return
+        d = parent
+
+
+_autoload_state_env()
+
+
 # 실행기 상태 루트 — env·creds·work 를 통째로 격리하는 단일 변수(ADR-0020).
 # 한 머신에서 여러 프로젝트를 돌릴 때 프로젝트 디렉토리마다
 # UNSKEIN_HOME=<프로젝트>/.unskein 으로 상태를 격리한다(코드=플러그인은 전역 1벌 공유).
@@ -684,6 +736,21 @@ def preflight() -> tuple[bool, list[str]]:
     lines.append(f"  [경로] 상태 루트(UNSKEIN_HOME): {UNSKEIN_HOME}"
                  + ("" if home_set else " (기본값)"))
     lines.append(f"  [경로] creds: {CRED_DIR}  /  work: {WORK_ROOT}")
+    # cwd 폴백으로 env 를 자동 로드했으면 어느 파일에서 왔는지 표시(오배선 무증상 방지).
+    env_file = (os.getenv("UNSKEIN_ENV_FILE") or "").strip()
+    if env_file:
+        lines.append(f"  [경로] env 파일(cwd 폴백 로드): {env_file}")
+    # 전역 ~/.unskein 무력화 점검(ADR-0021) — 프로젝트 격리 모드(UNSKEIN_HOME 지정 또는
+    # cwd 폴백 로드)인데 전역 ~/.unskein 이 남아 있으면, cwd 폴백이 이를 조상으로 주워
+    # 엉뚱한 프로젝트 상태로 붙을 수 있다. 강력 권고: 멀티프로젝트면 전역을 .unskein_back 으로
+    # 개명(또는 삭제)해 무력화한다. (경고 — 단일 프로젝트 전역 배치는 정상이라 차단은 안 한다.)
+    global_home = os.path.abspath(os.path.expanduser(os.path.join("~", ".unskein")))
+    if (home_set or env_file) and os.path.isdir(global_home) \
+            and os.path.realpath(global_home) != os.path.realpath(UNSKEIN_HOME):
+        check("전역 ~/.unskein 무력화(멀티프로젝트)", False,
+              f"{global_home} 잔존 — cwd 폴백이 조상으로 주울 수 있습니다. 멀티프로젝트면 "
+              f"`mv {global_home} {global_home}_back` 로 무력화(ADR-0021)",
+              critical=False)
     split_state = False
     if home_set:
         # 정합 가드 — 루트를 지정했는데 개별 변수(UNSKEIN_CRED_DIR/UNSKEIN_WORK_ROOT,
