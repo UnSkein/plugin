@@ -30,7 +30,7 @@ doctor 의 `preflight()` 는 **EXECUTOR(모리 실행기)** 가 작업을 잡기
 
 역할이 모호하면 임의 판단하지 말고 사용자에게 묻습니다. **PLANNER 전용**이면 아래 §1 스냅샷에서 executor-전용 `[실패]` 는 "해당 없음(정상)" 으로 읽고, 공통 항목만 갈래(§2)로 좁힙니다.
 
-> PLANNER 준비 확인은 별도입니다 — `UNSKEIN_PLANNER_TOKEN` + `UNSKEIN_API` 가 **프로젝트별 격리된 `planner.env`** 에서 로드돼(`. "${CLAUDE_PLUGIN_ROOT}/bin/planner-env.sh"` — source 우선·cwd 폴백, ADR-0021) 등록 API(businesses·projects·tasks·plan)에 닿으면 됩니다. 어느 파일에서 로드됐는지는 `UNSKEIN_PLANNER_ENV_FILE` 로 확인합니다(여러 프로젝트를 다룰 때 **엉뚱한 프로젝트의 planner.env 를 주웠는지** — cwd 폴백이 조상 `.unskein` 을 잡는 함정). 토큰이 안 잡히면 멈추고 알립니다(fallback 금지). 폴백: 사람이 웹 로그인 세션이면 admin 로그인 Bearer 도 인가. `플래너설치_멀티프로젝트.md`·`플래너설치_일반프로젝트.md` §4 · ADR-0013 · ADR-0021.
+> PLANNER 준비 확인은 별도입니다 — `UNSKEIN_PLANNER_TOKEN` + `UNSKEIN_API` 가 **프로젝트별 격리된 `planner.env`** 에서 로드돼(`. "${CLAUDE_PLUGIN_ROOT}/bin/planner-env.sh"` — source 우선·cwd 폴백, ADR-0021) 등록 API(businesses·projects·tasks·plan)에 닿으면 됩니다. 어느 파일에서 로드됐는지는 `UNSKEIN_PLANNER_ENV_FILE` 로 확인합니다(여러 프로젝트를 다룰 때 **엉뚱한 프로젝트의 planner.env 를 주웠는지** — cwd 폴백이 조상 `.unskein` 을 잡는 함정). 토큰이 안 잡히면 멈추고 알립니다(fallback 금지). 폴백: 사람이 웹 로그인 세션이면 admin 로그인 Bearer 도 인가. `unskein-scope` 가 코드베이스를 자동 clone/pull 하려면 `planner.env` 에 `UNSKEIN_BUSINESS`·`UNSKEIN_PROJECT`(repo_url 조회) + `UNSKEIN_SSH_KEY`(git 키)도 필요합니다(ADR-0022) — clone/pull 실패는 스킬이 그대로 멈추고 보고합니다(fallback 금지). `플래너설치.md` §0·§4 · ADR-0013 · ADR-0021 · ADR-0022.
 
 ## 1. 스냅샷 확보
 
