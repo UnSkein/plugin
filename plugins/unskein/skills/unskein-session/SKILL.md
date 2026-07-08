@@ -65,12 +65,28 @@ ls "$LOCAL"/unskein_$(date +%y-%m-%d)_* 2>/dev/null | wc -l
 - 요약: `$LOCAL/{파일명}.md`.
 - 인제스트 대상은 **현재 상태가 완료일 때만** 만든다: `$ROOT/docs/architecture/unskein-session--{날짜}--{제목}.md` 에 성공·결정·교훈 섹션만 추출(이쪽은 git 추적 — 확정 지식만 굳힌다). 미완료가 남았으면 만들지 않고 다음 세션에서 완료 후 생성한다.
 
-## Step 6: 보고
+## Step 6: 메모리 push (사적 컨텍스트 → 서버, 단말 이식)
+
+세션 마감 시 이 프로젝트의 **사적 메모리**(`~/.claude/projects/$SLUG/memory/`)를 서버 DB에 올려 다른 단말/다음 세션이 pull 로 컨텍스트를 복원하게 한다(user-memory-db-sync §1.1.2). `scope=private` 만 오르고 `scope=shared`·`MEMORY.md` 는 제외된다 — 공유 지식은 repo(CLAUDE.md/wiki)로 사람이 수동 승격하고, 인덱스는 pull 이 로컬 파일들로부터 재생성한다(충돌 핫스팟이라 sync 대상 아님).
+
+```bash
+# planner.env(UNSKEIN_API·PLANNER_TOKEN·BUSINESS·PROJECT) 로드 — source 우선·cwd 폴백(ADR-0021)
+. "${CLAUDE_PLUGIN_ROOT}/bin/planner-env.sh"
+python3 "${CLAUDE_PLUGIN_ROOT}/bin/memory-sync.py" push --codebase "$ROOT"
+```
+
+- **자격증명/프로젝트 없으면 멈춰 드러낸다**(fallback 금지) — 토큰 없음(401)·프로젝트 미특정(`UNSKEIN_BUSINESS`+`UNSKEIN_PROJECT` 또는 `UNSKEIN_PROJECT_ID` 필요)이면 스크립트가 비영점 종료하며 사유를 낸다. 조용히 skip 하지 않는다.
+- **idempotent** — 이미 올라간 것과 내용이 같으면 `skipped`(content_hash no-op). 매 세션 반복 호출 안전.
+- role 은 토큰 kind 파생(planner 세션 = planner). 파일 frontmatter 에 `role`/`scope` 가 있으면 그 값이 우선(frontmatter 3축 규약 — `bin/memory-sync.py` 헤더 참조).
+- 이 단계는 **repo 코드를 건드리지 않는다**(로컬 메모리만 up-sync) — 아래 "금지"의 코드 수정 금지와 무관.
+
+## Step 7: 보고
 
 ```
 대화연결 완료
 세션 요약: <repo>/docs/local/{파일명}.md
 인제스트 대상: docs/architecture/... (또는 "미완료 — 다음 세션에서 생성")
+메모리 push: upserted/skipped (또는 "미실행 — 자격증명 없음")
 복원: claude --resume '세션ID'
 ```
 
