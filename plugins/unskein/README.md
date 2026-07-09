@@ -28,7 +28,7 @@
 |------|--------|------|
 | `UNSKEIN_API` | `https://unskein.mupai.studio` | SaaS 작업 큐 주소 |
 | `UNSKEIN_MORI_TOKEN` | (필수) UnSkein 설정 화면에서 발급 | 모리 연결 토큰 |
-| `UNSKEIN_CLAUDE_TIMEOUT` | `600` | `claude -p` 실행 타임아웃(초) |
+| `UNSKEIN_CLAUDE_TIMEOUT` | `1800` | `claude -p` 실행 타임아웃(초) |
 | `UNSKEIN_GIT_TOKEN` | (HTTPS repo 시 필수) | git 클론·push 토큰. 호스트별 `UNSKEIN_GIT_TOKEN_<HOST>` 도 지원. 없으면 `creds/.env` 파싱 |
 | `UNSKEIN_HOME` | `~/.unskein` | **상태 루트** — EXECUTOR 는 creds·work, PLANNER 는 `planner.env` 가 이 밑으로 파생된다. 한 머신 다중 프로젝트면 프로젝트마다 `<프로젝트>/.unskein` 으로 상태를 통째 격리(ADR-0020 실행기 · ADR-0021 플래너). 빈 값·`~`·상대경로는 정규화 |
 | `UNSKEIN_PLANNER_TOKEN` | (PLANNER 필수) UnSkein 설정 화면에서 kind=planner 발급 | 플래너 등록 토큰 — `X-Planner-Token` 으로 등록 API(businesses·projects·tasks·plan) 인가. `planner.env` 에 담아 `bin/planner-env.sh` 가 로드(ADR-0013·0021). 모리 토큰과 다른 kind |
