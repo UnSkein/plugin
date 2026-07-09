@@ -1,0 +1,43 @@
+# ── UnSkein TESTER 인증·구동 (역할: 화면검증기, kind=tester) — 샘플 템플릿 (ADR-0014) ──
+# 윈도우 네이티브 TESTER 번들. EXECUTOR 의 executor.env(bash)에 대응하는 PowerShell 판이다.
+# 실제 설정은 프로젝트별 번들 디렉토리에 복사해 채운다(비밀 없는 이 템플릿은 커밋되는 원본):
+#   Copy-Item <이 파일> $env:USERPROFILE\.unskein\<business>__<project>\tester.ps1
+# (unskein-setup §T1). 한 윈도우 호스트에서 여러 프로젝트 TEST 를 격리하려면 번들을 프로젝트마다 하나씩.
+#
+# 사용: 검증 세션마다 **새 창**에서  →  . $env:USERPROFILE\.unskein\<business>__<project>\tester.ps1
+#   (dot-source. 이전 config 의 토큰·포트가 셸에 남지 않게 config 전환은 새 창에서 시작한다.)
+#   bash/Git Bash 로 돌리는 경우만 tester.env(export ...)+source — 설치가이드(윈도우) §4 주석 참조.
+# 주의: PowerShell 은 bash `export` 를 로드하지 않는다 → 값은 반드시 `$env:` 로 둔다(`$VAR` 아님).
+#   비밀(토큰)은 화면·셸 기록에 남기지 않는다(설정됨/없음만).
+
+# ── 작업 큐 서버 ──
+# queue.js 가 읽는 변수(필수). UNSKEIN_API 만 세팅하면 기본값 http://127.0.0.1:8000 로 붙어 실패한다.
+$env:UNSKEIN_API_BASE   = "https://unskein.mupai.studio"
+# (선택) 원시 curl.exe 예시용 — 동일 값
+$env:UNSKEIN_API        = "https://unskein.mupai.studio"
+
+# ── 테스터 토큰 (kind=tester) ──
+# 웹에서 kind=tester 로 발급(⚠️ mori·planner 아님, ADR-0014). 드롭다운에 없으면 사람 JWT 로:
+#   POST /api/me/mori-tokens {"name":"tester-<business>__<project>","kind":"tester"}
+# X-Mori-Token 헤더 자리(이름은 MORI 지만 값은 tester 토큰). claim 이 test 스테이지만 집는다.
+# 격리(경로 2)면 config 마다 **별도 발급** — 같은 토큰·겹치는 범위는 lease 펜싱이 두 tick 을 못 가른다.
+$env:UNSKEIN_MORI_TOKEN = ""
+
+# ── watch 범위 (이 번들이 담당할 사이트 = 비즈니스+프로젝트 이름) ──
+# 경로 2(격리): 둘 다 지정 → tick 이 `claim --business/--project` 로 좁힌다.
+# 경로 1(단일 멀티멤버십·순차): 둘 다 **비워** 두고 bare `claim` → 멤버십 전체 test 라운드로빈(이미 됨).
+# 공백이 든 값은 따옴표 필수. 담당하려면 이 토큰 사용자가 그 사이트 **멤버**여야 한다(node queue.js scope 로 확인).
+$env:UNSKEIN_WATCH_BUSINESS = "MUPAISTUDIO"
+$env:UNSKEIN_WATCH_PROJECT  = "UNSKEIN_SAAS"
+
+# ── CDP 포트↔프로필 페어링 (병렬 격리 = 경로 2 필수) ──
+# 인증(쿠키·localStorage·JWT) 경계는 **프로필**이다(unskein-test §3). config 마다 다른 포트+다른 프로필을 1:1 로.
+#   기동:  start.ps1 -Port $env:CDP_PORT -Profile $env:CDP_PROFILE
+#   (프로필 실체는 start.ps1 표준 위치 %USERPROFILE%\.cdp-chrome-<CDP_PROFILE>. 이 번들 cdp\pairing.txt 에 배정 기록.)
+# CDP_PORT 는 remote.js 가 읽는다(명령마다 --port 생략 가능). CDP_PROFILE 은 start.ps1 -Profile 인자로 넘기는 번들 관례.
+$env:CDP_PORT    = "9222"                        # config 마다 9222, 9223, … 유일하게(공유 금지)
+$env:CDP_PROFILE = "MUPAISTUDIO__UNSKEIN_SAAS"   # 보통 <business>__<project>
+
+# (선택) 이 config 전용 산출물 폴더 — report 의 payload 엔 경로만 싣는다(파일은 여기/저장소에).
+#   번들 관례일 뿐 스크립트가 읽는 변수는 아니다(report --doc/--payload 에 경로로 직접 지정).
+#$env:UNSKEIN_TESTER_CASES = "$env:USERPROFILE\.unskein\MUPAISTUDIO__UNSKEIN_SAAS\cases"
