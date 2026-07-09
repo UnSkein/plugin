@@ -8,6 +8,7 @@
 |------|------|------|
 | 오케스트레이터 | `orchestrator/run_once.py` | 작업 1건 선점 → 다오 한 바퀴 → 결과 회수 (폴링 없음) |
 | 오케스트레이터 | `orchestrator/run_loop.py` | 작업 큐를 주기 폴링하며 연속 구동 |
+| 오케스트레이터 | `orchestrator/work.py` | claim + 셋업 → **이 세션이 다오로 수행** → 회수 (함께 작업, `unskein-work`) |
 | 오케스트레이터 | `orchestrator/status.py` | 연결·등록 상태 읽기 전용 점검 |
 | command | `/unskein:run` | run_once 실행 (한 바퀴) |
 | command | `/unskein:watch` | run_loop 실행 (감시 루프) |
@@ -15,6 +16,7 @@
 | skill | `unskein-setup` | 실행기를 한 프로젝트용으로 셋업 (서버 연결·인증 + 런타임·의존성 설치 + repo 클론 + 검증·보완, 자격증명 갱신 포함) |
 | skill | `unskein-doctor` | 연결·실행 실패 진단·복구 안내 (status 스냅샷을 출발점으로 증상 → 원인 → 복구 → 재검증) |
 | skill | `unskein-test` | 다오가 만든 화면을 CDP로 런타임 UI 검증 (CDP 설치 + start/remote/stop, 콘솔·네트워크 에러 수집·캡처) |
+| skill | `unskein-work` | 헤드리스 `claude -p` 안 띄우고 **이 세션이 다오가 되어** 한 건 직접 처리 (prepare→수행→report, 운영자가 보며 조종 — 화면검증·첫 케이스·반복 실패 작업) |
 | 자식 규약 문서 | `orchestrator/CONTRACT.md` | 자식이 결과·질문을 오케스트레이터가 파싱할 약속 형식으로 출력하는 규약 |
 | 자식 다오 스킬 | `dao-skills/` | 모리가 작업마다 다오 작업 폴더(`WORK_ROOT`)로 복사해 **자식 다오에게** 깔아주는 운영 규약(`CLAUDE.md`) + 단계 스킬 7개. **모리 자신의 스킬이 아니다** — `skills/` 와 달리 plugin 이 로드하지 않고, `WORK_ROOT` 에서 띄운 자식 다오 세션만 읽는다. |
 | 다오 스킬 카탈로그 | `DAO-SKILLS.md` | 모리가 보는 **다오wsl 스킬 목록·용도** 참조 정보 — 다오wsl(작업 다오)에 어떤 스킬이 있고 언제 쓰는지. `dao-skills/` 의 각 `SKILL.md` 에서 자동 생성한다(직접 고치지 않는다). |
