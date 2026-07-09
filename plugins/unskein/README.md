@@ -13,7 +13,7 @@
 | command | `/unskein:run` | run_once 실행 (한 바퀴) |
 | command | `/unskein:watch` | run_loop 실행 (감시 루프) |
 | command | `/unskein:status` | 연결·등록 상태 점검 |
-| skill | `unskein-setup` | 실행기를 한 프로젝트용으로 셋업 (서버 연결·인증 + 런타임·의존성 설치 + repo 클론 + 검증·보완, 자격증명 갱신 포함) |
+| skill | `unskein-setup` | 실행기(EXECUTOR)·검증기(TESTER)를 프로젝트별로 셋업 (서버 연결·인증 + 런타임·의존성·클론·검증, 자격증명 갱신 + TESTER 프로비저닝 §T — 프로젝트별 tester.ps1·CDP 프로필/포트·cases 번들, 멀티 프로젝트 TEST) |
 | skill | `unskein-doctor` | 연결·실행 실패 진단·복구 안내 (status 스냅샷을 출발점으로 증상 → 원인 → 복구 → 재검증) |
 | skill | `unskein-test` | 다오가 만든 화면을 CDP로 런타임 UI 검증 (CDP 설치 + start/remote/stop, 콘솔·네트워크 에러 수집·캡처) |
 | skill | `unskein-work` | 헤드리스 `claude -p` 안 띄우고 **이 세션이 다오가 되어** 한 건 직접 처리 (prepare→수행→report, 운영자가 보며 조종 — 화면검증·첫 케이스·반복 실패 작업) |
@@ -49,7 +49,7 @@
 /unskein:status
 ```
 
-실행기를 한 프로젝트용으로 세울 때는 `unskein-setup` 스킬을 사용한다(서버 연결·인증·클론·검증 + 자격증명 갱신). 한 머신에서 여러 프로젝트를 돌리려면 프로젝트 디렉토리마다 `UNSKEIN_HOME=<프로젝트>/.unskein` 으로 상태를 격리해 셋업을 반복한다(1 watch 세션 = 1 프로젝트 + 프로젝트별 mori 토큰 — `unskein-setup` S0, ADR-0020). 작업이 안 돌면 `unskein-doctor` 로 진단·복구하고, 다오가 만든 화면을 실제로 확인할 때는 `unskein-test` 로 CDP 검증한다.
+실행기를 한 프로젝트용으로 세울 때는 `unskein-setup` 스킬을 사용한다(서버 연결·인증·클론·검증 + 자격증명 갱신). 한 머신에서 여러 프로젝트를 돌리려면 프로젝트 디렉토리마다 `UNSKEIN_HOME=<프로젝트>/.unskein` 으로 상태를 격리해 셋업을 반복한다(1 watch 세션 = 1 프로젝트 + 프로젝트별 mori 토큰 — `unskein-setup` S0, ADR-0020). 같은 스킬이 **TESTER(kind=tester) 프로비저닝**도 한다(`unskein-setup` §T): 한 윈도우 호스트가 여러 프로젝트의 `test`(화면검증)를 프로젝트별 번들(`tester.ps1`·CDP 프로필/포트·`cases`)로 격리 담당한다 — 순차(단일 멀티멤버십 토큰)와 병렬·격리(비즈니스별 토큰) 두 경로. 작업이 안 돌면 `unskein-doctor` 로 진단·복구하고, 다오가 만든 화면을 실제로 확인할 때는 `unskein-test` 로 CDP 검증한다.
 
 작업 다오(다오wsl)에 어떤 단계 스킬이 있고 언제 쓰는지는 [`DAO-SKILLS.md`](DAO-SKILLS.md) 카탈로그를 참조한다.
 

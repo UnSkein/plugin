@@ -1,11 +1,13 @@
 ---
 name: unskein-setup
-description: 실행기(WSL distro)를 한 프로젝트용으로 한 번에 세운다 — 서버 연결·인증(executor.env 단일 파일) + 런타임·의존성 설치 + repo 클론 + 프로비저닝 검증·보완. 자격증명(토큰·SSH 키) 갱신도 재실행으로. connect·add-site 를 통합했다. 각 단계 idempotent(이미 된 건 스킵). 트리거 — 실행기 셋업, unskein-setup, 서버 연결, 클라이언트 연결, UnSkein 셋업, 모리 토큰 등록, 프로젝트 등록, 프로젝트 추가, 사이트 추가, 자격증명 갱신, 토큰 갱신, 토큰 회전, 토큰 교체, SSH 키 교체, 호스트 추가, 프로비저닝, 클론 검증, 런타임 설치, 프로젝트 격리, UNSKEIN_HOME, 다중 프로젝트, 상태 격리.
+description: 실행기(WSL distro)를 한 프로젝트용으로 한 번에 세운다 — 서버 연결·인증(executor.env 단일 파일) + 런타임·의존성 설치 + repo 클론 + 프로비저닝 검증·보완. 자격증명(토큰·SSH 키) 갱신도 재실행으로. connect·add-site 를 통합했다. TESTER(kind=tester)도 프로비저닝한다 — 프로젝트별 tester.ps1·CDP 프로필/포트·cases 번들로 한 윈도우 호스트가 여러 프로젝트 TEST 를 격리 담당(§T). 각 단계 idempotent(이미 된 건 스킵). 트리거 — 실행기 셋업, unskein-setup, 서버 연결, 클라이언트 연결, UnSkein 셋업, 모리 토큰 등록, 프로젝트 등록, 프로젝트 추가, 사이트 추가, 자격증명 갱신, 토큰 갱신, 토큰 회전, 토큰 교체, SSH 키 교체, 호스트 추가, 프로비저닝, 클론 검증, 런타임 설치, 프로젝트 격리, UNSKEIN_HOME, 다중 프로젝트, 상태 격리, TESTER 셋업, tester 프로비저닝, 화면검증기 셋업, tester.ps1, CDP 프로필, 멀티 프로젝트 TEST, 병렬 검증 격리, 테스터 토큰 발급, 멤버십 추가.
 ---
 
-# UnSkein — 실행기 셋업 (한 프로젝트)
+# UnSkein — 실행기·검증기 셋업 (프로젝트별)
 
 이 실행기(WSL distro)를 **한 프로젝트**를 처리할 수 있게 한 번에 세운다 — 서버 연결·인증부터 클론·의존성·검증까지. **1 watch 세션 = 1 프로젝트.** 한 distro 에서 여러 프로젝트를 돌리려면 프로젝트 디렉토리마다 상태 루트를 격리해(`UNSKEIN_HOME=<프로젝트>/.unskein` — S0, ADR-0020) 이 셋업을 반복한다: 코드(플러그인)는 전역 1벌 공유, 상태(env·creds·work)만 프로젝트별로 갈라진다. 클라이언트 주인(사용자)과 대화하며 진행한다.
+
+> **이 스킬은 두 종류의 워커를 프로비저닝한다**: **EXECUTOR**(kind=mori · WSL 헤드리스 · 코드개발까지 — 아래 **S0–S4**) 와 **TESTER**(kind=tester · 윈도우 네이티브 · CDP 화면검증 — **§T**). S0–S4 는 EXECUTOR 기준이고, TESTER 는 §T 에서 같은 `UNSKEIN_HOME`-식 상태 격리를 **윈도우/PowerShell·프로젝트별 번들**로 편다(한 윈도우 호스트가 여러 프로젝트 TEST 를 로그인·토큰·포트·산출물 안 섞이게 담당). EXECUTOR 만 세우면 S0–S4 로 충분하고, TESTER 만이면 §T 로 바로 간다.
 
 - **각 단계는 idempotent** — 이미(수동으로) 된 건 감지해 **건너뛰고**, 안 된 것만 처리한다. 값이 빠지면 임의로 채우지 말고 **물어서 멈춘다**(fallback 금지).
 - 비밀(토큰·키)은 화면·셸 기록에 남기지 않는다. 저장소 주소·git 설정에 토큰을 넣지 않는다.
@@ -79,6 +81,71 @@ python3 "${CLAUDE_PLUGIN_ROOT}/bin/memory-sync.py" pull --codebase "<이 머신 
 - **자격증명 없으면 401 로 멈춘다** — 조용히 skip 하지 않는다. 프라이버시는 소유자 스코프(서버가 본인 `user_id` 행만 반환 — 타 사용자 메모리는 절대 안 온다).
 - frontmatter 3축 규약(`project`/`role`/`scope` + `maturity` 예약)·기본값은 `bin/memory-sync.py` 헤더가 단일 출처다.
 
+## T. TESTER 프로비저닝 (kind=tester) — 화면검증기 (윈도우)
+
+TESTER 는 **윈도우 네이티브**다(CDP Chrome 은 윈도우 프로세스라 WSL 루프백에서 못 닿는다 — 환경 필연 분리). EXECUTOR 와 같은 **상태 격리 사상**을 쓰되, 상태 루트가 `UNSKEIN_HOME` 대신 **프로젝트별 번들 디렉토리**다: 한 윈도우 호스트가 여러 프로젝트의 `test`(화면검증)를 **로그인·토큰·포트·산출물 안 섞이게** 담당한다. 코드(플러그인)는 전역 1벌 공유, 상태(토큰·CDP 프로필·cases)만 프로젝트별로 갈라진다. 근거: 설치가이드(윈도우) §2·§3·§5, `unskein-test` SKILL §0(자율 루프)·§3(포트↔프로필 = 인증 경계), ADR-0014(kind 스테이지 게이트).
+
+### T0. 먼저 경로를 고른다 (둘 중 하나 — 번들이 필요한지 여기서 갈린다)
+
+- **경로 1 — 단일 멀티멤버십 토큰(순차)**: 하나의 tester 토큰이 여러 사이트의 **멤버**이면, `UNSKEIN_WATCH_*` 를 **비운 bare** `node queue.js claim` 이 **멤버십 전체의 `test` 단계**를 라운드로빈으로 집는다. **이미 된다 — 프로젝트별 디렉토리·번들 불필요.** 단일 `tester.ps1` 하나로 "여러 프로젝트 순차 TEST" 가 된다. (⚠️ 단 사이트마다 **로그인이 다르면** 순차라도 CDP 프로필이 섞이니 → 경로 2.)
+- **경로 2 — 비즈니스별 토큰/사이트별 로그인(병렬·격리)**: 프로젝트마다 {토큰·API·WATCH, CDP 포트+프로필, cases}를 **격리한 번들**로 나눈다. 동시 병렬 검증·사이트별 로그인 분리에 필요. 아래 **T1–T3** 로 프로비저닝하고 CronCreate `*/5` 를 **config 마다** 건다.
+
+### T0-선결. 멤버십·토큰 (스코프 게이트 — 디렉토리로 안 풀린다)
+
+TESTER 가 집는 범위는 **그 토큰 사용자의 멤버십**으로 정해진다(kind 은 스테이지만 `test` 로 게이트할 뿐 범위를 넓히지 않는다 — ADR-0014, `queue.js scope`). **scope 밖 사이트는 번들을 만들어도 claim 되지 않는다** — 먼저 멤버십/토큰부터 붙인다:
+
+1. **담당 가능 사이트 확인**: `node queue.js scope` → 대상 비즈니스/프로젝트가 목록에 있어야 한다. 없으면 아래 2·3 이 선결.
+2. **멤버십 추가**(경로 1 을 넓히는 정석): 그 사이트에 **tester 토큰 사용자를 멤버로 추가**한다(운영자/플래너가 사이트 멤버 관리에서). 멤버가 되면 그 사이트의 `test` 가 그 토큰의 scope 에 들어온다.
+3. **비즈니스별 tester 토큰 발급**(경로 2 격리용): 사이트마다 **전용 tester 토큰**을 발급해 lease 펜싱을 분리한다 — 사람 JWT 로:
+   ```
+   POST /api/me/mori-tokens   {"name":"tester-<business>__<project>","kind":"tester"}
+   ```
+   (⚠️ mori·planner 아님 — kind=`tester`. 웹 토큰 드롭다운에 tester 가 없을 때의 정식 경로.) 같은 사용자가 여러 비즈니스 멤버여도 config 마다 **다른 토큰**을 쓰면 두 tick 의 lease 를 서버가 구분한다(EXECUTOR S0 전제 1 과 동종 — 토큰 공유 금지).
+
+> #519 처럼 **scope 밖**(예: business_id=16)으로 온 `test` 는 위 2/3 가 **선결**이다 — 디렉토리 생성으로 해결되지 않는다.
+
+### T1. 번들 생성 (경로 2 · 프로젝트별) — idempotent
+
+`%USERPROFILE%\.unskein\<business>__<project>\` 아래에 config 번들을 만든다(이미 있으면 스킵, 토큰·포트 갱신은 재실행으로 — EXECUTOR 의 `add-site` 에 대응해 **프로젝트 추가는 이 T1 을 다른 `<business>__<project>` 로 반복**):
+
+```
+%USERPROFILE%\.unskein\<business>__<project>\
+  tester.ps1     # $env:UNSKEIN_API_BASE / UNSKEIN_MORI_TOKEN(kind=tester) / UNSKEIN_WATCH_BUSINESS / UNSKEIN_WATCH_PROJECT / CDP_PORT / CDP_PROFILE
+  cdp\           # 이 config 의 포트↔프로필 페어링 기록(pairing.txt). 프로필 실체는 start.ps1 표준 위치 %USERPROFILE%\.cdp-chrome-<CDP_PROFILE>
+  cases\         # 검증 산출물(리포트·스크린샷·시나리오). report 의 payload 엔 경로만 싣는다
+```
+
+- 템플릿 `${CLAUDE_PLUGIN_ROOT}/templates/tester.ps1.sample` 을 복사해 편집기로 채운다(값은 `$env:` — PowerShell 은 bash `export` 를 로드하지 않는다. 비밀은 화면·셸 인자로 넣지 말 것):
+  ```powershell
+  New-Item -ItemType Directory -Force "$env:USERPROFILE\.unskein\<business>__<project>\cdp","$env:USERPROFILE\.unskein\<business>__<project>\cases" | Out-Null
+  Copy-Item "$env:CLAUDE_PLUGIN_ROOT\templates\tester.ps1.sample" "$env:USERPROFILE\.unskein\<business>__<project>\tester.ps1"
+  ```
+- **포트↔프로필 1:1 배정(충돌 금지)**: config 마다 **서로 다른 `CDP_PORT`**(9222, 9223, …)와 **서로 다른 프로필**(`CDP_PROFILE=<business>__<project>`)을 배정한다 — 인증(쿠키·JWT) 경계는 탭이 아니라 **프로필**이라, 안 나누면 로그인이 섞인다(`unskein-test` §3). `tester.ps1` 에 `$env:CDP_PORT` 를 박아두면 `remote.js` 명령마다 `--port` 를 안 붙여도 된다. 배정을 `cdp\pairing.txt` 에 한 줄로 남겨 다음 config 와 겹치지 않게 한다.
+
+> 경로 1 이면 T1 을 건너뛴다 — 번들 없이 단일 `tester.ps1`(WATCH 빈 값) 하나면 된다.
+
+### T2. 사전 준비·검증 (윈도우)
+
+1. **윈도우 도구**: 시스템 Chrome · **윈도우 node18+**(`queue.js` 전역 fetch) · **Playwright(npm)**(`npm i -D playwright`, `npx playwright install` 불필요) · 윈도우 Claude Code — 설치가이드(윈도우) §2.
+2. **플러그인 ≥1.25.0**(user 스코프) — tester 프로비저닝·자율 루프가 든 버전. `claude plugin list` 로 확인.
+3. **토큰·스코프 검증**: config 를 dot-source 한 뒤 `node queue.js scope` **200 + 대상 사이트 노출**을 확인한다. `401`=kind 오배정/토큰 짝 어긋남, 대상 미노출=T0-선결(멤버십) 필요. 안 되면 사유를 **그대로 보여주고 멈춘다**(다른 값으로 우회 금지 — fallback 금지).
+
+### T3. 실행 표준 (두 경로 — CronCreate 는 config 단위)
+
+- **경로 1(단일 토큰·순차)**: **새 창**에서 단일 `tester.ps1` dot-source(`. tester.ps1`) → `UNSKEIN_WATCH_*` 를 비운 채 `node queue.js claim` 라운드로빈 → 검증 → report. 연속 운용은 CronCreate `*/5` **하나**. (사이트별 로그인이 같거나 무인증일 때 적합.)
+- **경로 2(격리·병렬)**: config 마다 **새 창**에서 `. tester.ps1` →
+  ```powershell
+  & "$env:CLAUDE_PLUGIN_ROOT\skills\unskein-test\scripts\start.ps1" -Port $env:CDP_PORT -Profile $env:CDP_PROFILE
+  # 한 tick: claim(--business/--project) → remote.js collect/attrs/shot → report --status=inspect|plan --doc=<cases\...> --payload=<cases\...>
+  ```
+  산출물은 그 config 의 `cases\` 에 남기고 payload 엔 경로만. 연속 운용은 CronCreate `*/5` 를 **config 마다** 건다. 한 tick 상세는 설치가이드(윈도우) §6.1 = `unskein-test` §0.2.
+
+**격리 누출 방지(경로 2)**: ① config 마다 **다른 tester 토큰**(같은 토큰·겹치는 범위면 lease 펜싱이 두 tick 을 못 가른다 — T0-선결 3). ② config 마다 **새 창**(이전 config 의 `$env:UNSKEIN_MORI_TOKEN`·`CDP_PORT` 가 셸에 남으면 엉뚱하게 붙는다). ③ 포트·프로필 **1:1 고정**(공유 시 로그인 혼입).
+
+### T-갱신. 재검증·회전 (재실행)
+
+토큰 회전·포트 재배정·사이트 추가는 이 §T 를 다시 돌려 해당 config 의 `tester.ps1`(또는 새 `<business>__<project>` 번들)을 갱신하고 `node queue.js scope` 로 재확인한다. 교체 후 옛 토큰은 발급처에서 폐기하도록 안내한다. 값은 화면에 출력하지 않고 "설정됨/없음" 만 알린다.
+
 ## (선택) 운영자 상태줄
 
 운영자의 watch 세션 상단에 **작업디렉토리 · 컨텍스트 사용률 · 모델명**을 표시하고 싶으면(머신 1회, 사용자 전역 `~/.claude/`). 사용자에게 물어 **동의할 때만** 설치한다. (헤드리스 다오 `claude -p` 엔 안 보이고 인터랙티브 세션에만 뜬다. 플러그인은 statusLine 을 직접 실을 수 없어 — 설정상 미지원 — 이 단계로 opt-in 설치한다.)
@@ -92,4 +159,4 @@ python3 "${CLAUDE_PLUGIN_ROOT}/bin/memory-sync.py" pull --codebase "<이 머신 
 
 ## 자격증명 갱신 (재실행)
 
-토큰 회전·SSH 키 교체·호스트 추가는 **이 스킬을 다시 돌려** S1 의 `executor.env` 값(또는 `creds/` SSH 키)을 갱신하고 S3 로 재검증한다. 교체 후 옛 토큰·공개키는 발급처(GitHub 등)에서 폐기하도록 안내한다. 값은 화면에 출력하지 않고 "설정됨/없음"만 알린다.
+토큰 회전·SSH 키 교체·호스트 추가는 **이 스킬을 다시 돌려** S1 의 `executor.env` 값(또는 `creds/` SSH 키)을 갱신하고 S3 로 재검증한다(EXECUTOR). TESTER 번들(`tester.ps1`)의 토큰 회전·포트 재배정·사이트 추가는 **§T-갱신** 으로 한다. 교체 후 옛 토큰·공개키는 발급처(GitHub 등)에서 폐기하도록 안내한다. 값은 화면에 출력하지 않고 "설정됨/없음"만 알린다.
