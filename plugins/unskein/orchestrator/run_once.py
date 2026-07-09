@@ -35,7 +35,7 @@ API_BASE = os.getenv("UNSKEIN_API", "https://unskein.mupai.studio")
 # 진입점(main)에서 한다. /api/health 같은 공개 엔드포인트는 토큰 없이도 점검할 수 있다.
 MORI_TOKEN = os.getenv("UNSKEIN_MORI_TOKEN")
 # claude -p 가 오래 걸릴 수 있어 넉넉히.
-CLAUDE_TIMEOUT = int(os.getenv("UNSKEIN_CLAUDE_TIMEOUT", "600"))
+CLAUDE_TIMEOUT = int(os.getenv("UNSKEIN_CLAUDE_TIMEOUT", "1800"))
 # 작업별 heartbeat 주기(초). process_task 가 단일패스·동시 풀 양쪽에서 이 주기로 찍어,
 # 한 턴이 서버 lease(CLAIM_STALE) 를 넘겨도 다른 워커가 같은 작업을 이중선점하지 못하게 한다.
 HEARTBEAT_INTERVAL = int(os.getenv("UNSKEIN_HEARTBEAT_INTERVAL", "60"))

@@ -129,7 +129,7 @@ ls -d "${CLAUDE_PLUGIN_ROOT}/dao-skills"
 
 `/unskein:run` 출력으로 세 갈래를 구분합니다:
 
-- **timeout**: "claude -p timeout (600s 초과)" 로 회수됨. 작업이 `UNSKEIN_CLAUDE_TIMEOUT`(기본 600초)을 넘긴 것입니다. 작업 규모에 비해 한도가 짧으면 사용자와 상의해 한도를 올리거나 작업을 더 작게 나눕니다. 환경값을 임의로 키우지 말고 사용자에게 확인합니다.
+- **timeout**: "claude -p timeout (1800s 초과)" 로 회수됨. 작업이 `UNSKEIN_CLAUDE_TIMEOUT`(기본 1800초)을 넘긴 것입니다. 작업 규모에 비해 한도가 짧으면 사용자와 상의해 한도를 올리거나 작업을 더 작게 나눕니다. 환경값을 임의로 키우지 말고 사용자에게 확인합니다.
 - **is_error**: "claude is_error: <subtype>" 로 회수됨. claude 가 오류 상태로 끝난 것입니다. 함께 출력된 `[dao stderr]` 와 raw stdout 머리부분으로 사유(인증·권한·실행 환경)를 봅니다.
 - **JSON 파싱 실패**: "JSON 파싱 실패: ..." 로 회수됨. claude 출력이 정상 JSON 이 아닙니다. raw stdout 머리부분을 확인해 claude 가 에러 메시지를 평문으로 냈는지(예: 로그인·인증 필요, 권한 거부) 봅니다.
 
