@@ -87,3 +87,9 @@ tested_url: http://localhost:5151/forge   # (선택)
 ## 5. 서버 API (참고 — 6.1 backend)
 
 `POST /api/cases/push`(upsert, content_hash 동일 skip) · `GET /api/cases/pull?business_id=&host=`(내 것 전부 + public, 본문 포함) · visibility 전환/삭제는 웹 UI(소유자만). 인가는 어느 kind 토큰이든 같은 사용자(`get_memory_principal` 계열).
+
+## 6. 동기 의미론 (수정 라운드 1 — #563)
+
+- **visibility 의 소유는 서버(웹 선별)다.** push 는 기존 케이스의 visibility 를 덮지 않고(서버가 보장), pull 은 서버 컬럼값을 로컬 frontmatter 에 병합한다 — 웹에서 private 전환하면 본문이 안 바뀌었어도 재pull 이 로컬 `visibility:` 줄을 고친다.
+- **대량 push 는 자동 청크**(기본 50건/POST, `--chunk N`) — 단일 POST 는 서버 본문 한도(413)에 걸린다. 청크는 멱등이라 중간 실패 후 재실행이 안전하다.
+- **UTF-8 BOM 붙은 case.md 도 정상 처리**된다(규약 위반 아님). 윈도우 콘솔(cp949)에서도 출력이 깨지지 않는다(스크립트가 stdout 을 UTF-8 로 재구성).
