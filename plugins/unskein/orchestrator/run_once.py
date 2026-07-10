@@ -52,6 +52,11 @@ GC_GRACE_SECONDS = int(os.getenv("UNSKEIN_GC_GRACE", "3600"))
 # id 는 환경별로 다르므로 이름으로 지정한다(서버가 멤버십 안에서 매칭).
 WATCH_BUSINESS = os.getenv("UNSKEIN_WATCH_BUSINESS") or None
 WATCH_PROJECT = os.getenv("UNSKEIN_WATCH_PROJECT") or None
+# watch 루트 task id(ADR-0026) — 지정하면 그 작업의 WBS 서브트리(자기 포함)로만 좁혀
+# 선점한다. 개발자별 익스큐터가 한 프로젝트 안에서 자기 WBS 만 병렬 개발하는 용도.
+# bis/prj 와 달리 id 로 지정한다(보드 상세패널 "복사" 키 문자열 task_id=… 과 일치).
+# 문자열로 들고 있다가 resolve_watch_scope 가 숫자 형식을 검증한다(import-safe).
+WATCH_TASK = (os.getenv("UNSKEIN_WATCH_TASK") or "").strip() or None
 
 # EXECUTOR opt-in(ADR-0016) — 켜면 이 클라이언트가 test 도 집어 코드검증(unskein-verify)을
 # pre-merge 로 돌리고 통과 시 inspect 로 잇는다(화면검증 TESTER 는 배포 후 별개). claim 에
@@ -63,29 +68,37 @@ AUTO_ADVANCE_TEST = (os.getenv("UNSKEIN_AUTO_ADVANCE_TEST") or "").strip().lower
 # watch 대상 키워드(인자/명령줄에서 인식). 짧은형(bis/prj)·풀네임·플래그·key=value 모두 허용.
 _WATCH_BIZ_KEYS = {"business", "bis", "--business", "-b"}
 _WATCH_PRJ_KEYS = {"project", "prj", "--project", "-p"}
+_WATCH_TASK_KEYS = {"task", "task_id", "--task", "-t"}
 
 
-def parse_watch_args(argv: list[str]) -> tuple[str | None, str | None, list[str]]:
-    """argv 에서 watch 대상(비즈니스/프로젝트)을 뽑고 나머지 위치 인자를 돌려준다.
+def parse_watch_args(
+    argv: list[str],
+) -> tuple[str | None, str | None, str | None, list[str]]:
+    """argv 에서 watch 대상(비즈니스/프로젝트/task 루트)을 뽑고 나머지 위치 인자를 돌려준다.
 
     인식 형식(값에 공백 있으면 따옴표로 묶는다):
       bis "이름" prj "이름"  /  business <이름> project <이름>
       --business <이름> --project <이름>  /  -b <이름> -p <이름>
       bis=이름  business=이름  prj=이름  project=이름
-    반환 (business, project, positionals). 못 만나면 해당 값은 None.
+      task <id>  --task <id>  -t <id>  task=<id>  task_id=<id>  (ADR-0026 서브트리 스코프)
+    반환 (business, project, task, positionals). 못 만나면 해당 값은 None.
     """
-    business = project = None
+    business = project = task = None
+    keyed = _WATCH_BIZ_KEYS | _WATCH_PRJ_KEYS | _WATCH_TASK_KEYS
     positionals: list[str] = []
     i = 0
     while i < len(argv):
         tok = argv[i]
         key = tok.lower()
-        if "=" in tok and key.split("=", 1)[0] in (_WATCH_BIZ_KEYS | _WATCH_PRJ_KEYS):
+        if "=" in tok and key.split("=", 1)[0] in keyed:
             k, _, v = tok.partition("=")
-            if k.lower() in _WATCH_BIZ_KEYS:
+            k = k.lower()
+            if k in _WATCH_BIZ_KEYS:
                 business = v
-            else:
+            elif k in _WATCH_PRJ_KEYS:
                 project = v
+            else:
+                task = v
             i += 1
             continue
         if key in _WATCH_BIZ_KEYS and i + 1 < len(argv):
@@ -96,21 +109,29 @@ def parse_watch_args(argv: list[str]) -> tuple[str | None, str | None, list[str]
             project = argv[i + 1]
             i += 2
             continue
+        if key in _WATCH_TASK_KEYS and i + 1 < len(argv):
+            task = argv[i + 1]
+            i += 2
+            continue
         positionals.append(tok)
         i += 1
-    return business, project, positionals
+    return business, project, task, positionals
 
 
-def apply_watch_args(business: str | None, project: str | None) -> None:
+def apply_watch_args(
+    business: str | None, project: str | None, task: str | None = None
+) -> None:
     """argv 로 받은 watch 대상으로 모듈 전역을 덮어쓴다(인자가 env 보다 우선).
 
     값이 None(인자 미지정)이면 env 기본값을 그대로 둔다. 빈 문자열은 '대상 없음'.
     """
-    global WATCH_BUSINESS, WATCH_PROJECT
+    global WATCH_BUSINESS, WATCH_PROJECT, WATCH_TASK
     if business is not None:
         WATCH_BUSINESS = business or None
     if project is not None:
         WATCH_PROJECT = project or None
+    if task is not None:
+        WATCH_TASK = task or None
 
 def _env_path(name: str, default: str) -> str:
     """경로 env 를 읽는다 — 빈 값은 미설정 취급(기본값 사용), '~'·상대경로는 절대경로로
@@ -578,6 +599,15 @@ def gc_work_root() -> None:
         shutil.rmtree(path, ignore_errors=True)
 
 
+class WatchScopeError(RuntimeError):
+    """watch 대상(범위) 오류 — 재시도해도 같으니 호출자가 폴링을 멈춰야 한다.
+
+    claim 의 일시 장애(5xx·네트워크, 재시도 대상)와 구분되는 영구 오류: 대상 작업이
+    없거나 범위 밖(404), 또는 구서버가 task 스코프를 무시(에코 부재). 조용히 전체
+    범위로 넘어가는 fallback 을 막는다.
+    """
+
+
 def _claim_body() -> dict:
     """claim 에 실어 보낼 watch 대상 필터. 미지정 항목은 넣지 않는다."""
     body: dict = {}
@@ -585,17 +615,47 @@ def _claim_body() -> dict:
         body["business"] = WATCH_BUSINESS
     if WATCH_PROJECT:
         body["project"] = WATCH_PROJECT
+    if WATCH_TASK:
+        body["task_id"] = int(WATCH_TASK)
     if AUTO_ADVANCE_TEST:
         body["auto_advance_test"] = True
     return body
 
 
+def claim_once() -> dict:
+    """claim 1회 — watch 대상 오류를 일시 장애와 구분해 WatchScopeError 로 드러낸다.
+
+    - 404: 지정한 watch 대상(bis/prj/task)이 없거나 범위 밖 — 재시도 무의미.
+    - task 스코프 지정 + 응답에 watch_task_id 에코 부재: 구서버가 필터를 조용히
+      무시하고 범위 밖 작업을 내줄 수 있다 — 처리하지 않고 중단한다(fallback 금지).
+      (이때 서버에 남은 선점 잔재는 heartbeat 만료로 자동 회수된다 — ADR-0015.)
+    """
+    try:
+        claim = _post("/api/mori/claim", _claim_body())
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            detail = exc.read().decode("utf-8", "replace")[:300]
+            raise WatchScopeError(f"watch 대상 오류(서버 404): {detail}") from exc
+        raise
+    if WATCH_TASK and "watch_task_id" not in claim:
+        raise WatchScopeError(
+            "서버가 watch task(서브트리) 스코프를 지원하지 않습니다 — 지정한 task 필터가 "
+            "무시된 채 범위 밖 작업이 선점될 수 있어 중단합니다(서버 업데이트 필요)."
+        )
+    return claim
+
+
 def watch_label() -> str:
     """현재 watch 대상을 사람이 읽을 한 줄로."""
-    if not WATCH_BUSINESS and not WATCH_PROJECT:
+    if not WATCH_BUSINESS and not WATCH_PROJECT and not WATCH_TASK:
         return "전체 (대상 미지정)"
-    biz = WATCH_BUSINESS or "(전체 비즈니스)"
-    return f"{biz} / {WATCH_PROJECT}" if WATCH_PROJECT else biz
+    parts: list[str] = []
+    if WATCH_BUSINESS or WATCH_PROJECT:
+        biz = WATCH_BUSINESS or "(전체 비즈니스)"
+        parts.append(f"{biz} / {WATCH_PROJECT}" if WATCH_PROJECT else biz)
+    if WATCH_TASK:
+        parts.append(f"task#{WATCH_TASK} 서브트리")
+    return " · ".join(parts)
 
 
 def resolve_watch_scope() -> tuple[bool, str]:
@@ -604,7 +664,14 @@ def resolve_watch_scope() -> tuple[bool, str]:
     반환 (ok, message). 대상 미지정이면 검증 없이 통과한다.
     이름이 멤버십에 없으면 가능한 이름을 곁들여 ok=False 로 드러낸다
     (조용한 fallback 금지 — 잘못된 대상이면 멈춘다).
+    task 루트는 형식(숫자)만 여기서 검증한다 — 존재·범위는 서버가 claim 에서
+    판정하고(404), claim_once 가 WatchScopeError 로 폴링을 멈춘다.
     """
+    if WATCH_TASK and not str(WATCH_TASK).isdigit():
+        return False, (
+            f"watch 대상 task '{WATCH_TASK}' 는 숫자 id 여야 합니다 "
+            "(보드 상세패널 '복사'의 task_id=<숫자> 값)."
+        )
     if not WATCH_BUSINESS and not WATCH_PROJECT:
         return True, watch_label()
     try:
@@ -827,18 +894,19 @@ def _is_local_api(api: str) -> bool:
 def autonomous_scope_block() -> str | None:
     """자율 루프(watch)를 막아야 하는 위험 조합이면 사유를 돌려준다(아니면 None).
 
-    범위 미지정(WATCH_BUSINESS·WATCH_PROJECT 둘 다 없음) + 원격(테스트/프로덕션) 서버는
-    이 클라이언트가 전체 큐를 무제한 자율 선점(claim)하게 한다. 다오는 항상
+    범위 미지정(WATCH_BUSINESS·WATCH_PROJECT·WATCH_TASK 모두 없음) + 원격(테스트/프로덕션)
+    서버는 이 클라이언트가 전체 큐를 무제한 자율 선점(claim)하게 한다. 다오는 항상
     --dangerously-skip-permissions 로 무인 실행되므로, 여러 클라이언트가 같은 큐를
     동시에 물면 같은 task 를 두고 경쟁한다(이번 두 모리 사고). 명시 동의
     (UNSKEIN_ALLOW_UNSCOPED=1) 없이는 막는다 — 범위를 지정해 단독 소유하게 한다.
+    (task 서브트리 스코프(ADR-0026)도 단독 소유 범위로 인정한다.)
     """
-    unscoped = not WATCH_BUSINESS and not WATCH_PROJECT
+    unscoped = not WATCH_BUSINESS and not WATCH_PROJECT and not WATCH_TASK
     remote = not _is_local_api(API_BASE)
     if unscoped and remote and os.getenv("UNSKEIN_ALLOW_UNSCOPED") != "1":
         return (
             f"범위 미지정(전체 큐) + 원격 서버({API_BASE}) 자율 루프는 막혀 있습니다 — "
-            "여러 클라이언트가 같은 큐를 경쟁하는 사고 방지. bis/prj 로 범위를 "
+            "여러 클라이언트가 같은 큐를 경쟁하는 사고 방지. bis/prj(또는 task) 로 범위를 "
             "지정(권장)하거나, 의도적이면 UNSKEIN_ALLOW_UNSCOPED=1 로 명시 동의하세요."
         )
     return None
@@ -1428,9 +1496,9 @@ def main() -> int:
             "UnSkein 설정 화면에서 발급한 토큰을 넣으세요."
         )
         return 1
-    # 0) watch 대상 — 인자(bis/prj 등)로 받으면 env 보다 우선 적용한 뒤 검증한다.
-    _b, _p, _ = parse_watch_args(sys.argv[1:])
-    apply_watch_args(_b, _p)
+    # 0) watch 대상 — 인자(bis/prj/task 등)로 받으면 env 보다 우선 적용한 뒤 검증한다.
+    _b, _p, _t, _ = parse_watch_args(sys.argv[1:])
+    apply_watch_args(_b, _p, _t)
     # 잘못 지정했으면 선점 전에 멈춘다(조용한 전체 폴백 금지).
     ok, label = resolve_watch_scope()
     if not ok:
@@ -1450,8 +1518,12 @@ def main() -> int:
     # 버려진 작업폴더 GC(F) — 죽은 턴/마감 작업의 클론 누적을 막는다. 선점 전에 한 번.
     gc_work_root()
 
-    # 1) claim (watch 대상 필터를 실어 보낸다)
-    claim = _post("/api/mori/claim", _claim_body())
+    # 1) claim (watch 대상 필터를 실어 보낸다 — 대상 오류·구서버는 WatchScopeError 로 중단)
+    try:
+        claim = claim_once()
+    except WatchScopeError as exc:
+        print(f"[watch] {exc}")
+        return 1
     if not claim.get("claimed"):
         print("선점할 작업이 없습니다 (대상 범위 내 plan/answered 0건).")
         return 0
