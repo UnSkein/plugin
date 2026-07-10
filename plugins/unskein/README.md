@@ -15,7 +15,8 @@
 | command | `/unskein:status` | 연결·등록 상태 점검 |
 | skill | `unskein-setup` | 실행기(EXECUTOR)·검증기(TESTER)를 프로젝트별로 셋업 (서버 연결·인증 + 런타임·의존성·클론·검증, 자격증명 갱신 + TESTER 프로비저닝 §T — 프로젝트별 tester.ps1·CDP 프로필/포트·cases 번들, 멀티 프로젝트 TEST) |
 | skill | `unskein-doctor` | 연결·실행 실패 진단·복구 안내 (status 스냅샷을 출발점으로 증상 → 원인 → 복구 → 재검증) |
-| skill | `unskein-test` | 다오가 만든 화면을 CDP로 런타임 UI 검증 (CDP 설치 + start/remote/stop, 콘솔·네트워크 에러 수집·캡처) |
+| skill | `unskein-test` | 다오가 만든 화면을 CDP로 런타임 UI 검증 (CDP 설치 + start/remote/stop, 콘솔·네트워크 에러 수집·캡처 + 케이스 루프·리포트 표준 §0.5) |
+| skill | `unskein-case` | TESTER 검증 케이스(노하우)를 서버와 동기 — pull(내 것 + 같은 비즈니스 public)/push(내 것만, 무변경 skip). CLI 는 `bin/case-sync.py`, 로컬 루트 `$UNSKEIN_HOME/cases` |
 | skill | `unskein-work` | 헤드리스 `claude -p` 안 띄우고 **이 세션이 다오가 되어** 한 건 직접 처리 (prepare→수행→report, 운영자가 보며 조종 — 화면검증·첫 케이스·반복 실패 작업) |
 | 자식 규약 문서 | `orchestrator/CONTRACT.md` | 자식이 결과·질문을 오케스트레이터가 파싱할 약속 형식으로 출력하는 규약 |
 | 자식 다오 스킬 | `dao-skills/` | 모리가 작업마다 다오 작업 폴더(`WORK_ROOT`)로 복사해 **자식 다오에게** 깔아주는 운영 규약(`CLAUDE.md`) + 단계 스킬 7개. **모리 자신의 스킬이 아니다** — `skills/` 와 달리 plugin 이 로드하지 않고, `WORK_ROOT` 에서 띄운 자식 다오 세션만 읽는다. |
