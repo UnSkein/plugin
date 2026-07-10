@@ -56,7 +56,7 @@ host[:port] 에서 `:` → `-`. 예: `http://localhost:5151/x` → `localhost-51
   UNSKEIN_BUSINESS / UNSKEIN_WATCH_BUSINESS   (선택) 비즈니스 이름 — --business 생략 시
 
 사용:
-  python3 bin/case-sync.py push --business <이름|id> [--host SLUG] [--dry-run]
+  python3 bin/case-sync.py push --business <이름|id> [--host SLUG] [--dry-run] [--chunk N]
   python3 bin/case-sync.py pull --business <이름|id> [--host SLUG]
   python3 bin/case-sync.py slug <url|host[:port]>    # 호스트 슬러그 파생(규칙 단일 출처)
   python3 bin/case-sync.py selftest                  # 오프라인 자체 테스트(서버 불요)
@@ -73,6 +73,12 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+
+# 윈도우 콘솔(cp949 등)에서 ✓·한글 출력이 UnicodeEncodeError 로 크래시하지 않게
+# stdout/stderr 를 UTF-8 로 재구성한다(#563 P2). reconfigure 부재 환경은 그대로 둔다.
+for _s in (sys.stdout, sys.stderr):
+    if hasattr(_s, "reconfigure"):
+        _s.reconfigure(encoding="utf-8", errors="replace")
 
 CASE_FILE = "case.md"
 PUBLIC_DIR = "_public"  # 남의 public 케이스 — 읽기 전용, push 제외
@@ -137,7 +143,9 @@ def parse_frontmatter(text):
 
     반환: (fields, body). 단층 `key: value` 만 지원(케이스 규약에 중첩 없음).
     `tags` 는 `[a, b]` 또는 `a, b` 를 리스트로 푼다. frontmatter 없으면 ({}, text).
+    UTF-8 BOM 이 붙은 파일도 규약 위반이 아니다(#562 P3) — 파싱 전에 벗긴다.
     """
+    text = text.lstrip("\ufeff")
     if not text.startswith("---"):
         return {}, text
     lines = text.split("\n")
@@ -159,6 +167,34 @@ def parse_frontmatter(text):
         rawtags = fields["tags"].strip().strip("[]")
         fields["tags"] = [t for t in (x.strip().strip("'\"") for x in rawtags.split(",")) if t]
     return fields, body
+
+
+def apply_server_visibility(text, server_vis):
+    """서버 visibility 컬럼값을 케이스 파일 frontmatter 에 반영한다(#563 P1).
+
+    본문 blob 은 push 원문 그대로 저장되므로, 웹 UI 에서 전환(PATCH)해도 blob 속
+    `visibility:` 줄은 옛값이다. pull 이 이 줄만 서버값으로 고쳐 로컬이 서버 진실을
+    따라가게 한다(전환의 소유 = 서버/웹 선별). 본문(body)은 건드리지 않는다.
+    """
+    if not server_vis:
+        return text
+    fields, _ = parse_frontmatter(text)
+    if not fields or (fields.get("visibility") or "public") == server_vis:
+        return text
+    lines = text.lstrip("\ufeff").split("\n")
+    end = None
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            end = i
+            break
+    if end is None:
+        return text
+    for i in range(1, end):
+        if lines[i].lstrip() == lines[i] and lines[i].partition(":")[0].strip() == "visibility":
+            lines[i] = f"visibility: {server_vis}"
+            return "\n".join(lines)
+    lines.insert(end, f"visibility: {server_vis}")
+    return "\n".join(lines)
 
 
 def cases_root():
@@ -273,7 +309,7 @@ def scan_local_cases(root, host_filter=None):
                 rel = os.path.relpath(cpath, root)
                 if not os.path.isfile(cpath):
                     continue
-                with open(cpath, encoding="utf-8") as fh:
+                with open(cpath, encoding="utf-8-sig") as fh:  # BOM 허용(#562 P3)
                     raw = fh.read()
                 fields, _ = parse_frontmatter(raw)
                 probs = []
@@ -309,7 +345,7 @@ def scan_local_cases(root, host_filter=None):
 
 # ─────────────────────────── push ───────────────────────────
 
-def cmd_push(cfg, root, business_arg, host_filter, dry_run):
+def cmd_push(cfg, root, business_arg, host_filter, dry_run, chunk=50):
     items, errors = scan_local_cases(root, host_filter)
     for e in errors:
         print(f"[push] 규약 위반(제외됨): {e}", file=sys.stderr)
@@ -323,8 +359,17 @@ def cmd_push(cfg, root, business_arg, host_filter, dry_run):
                   f"({it['visibility']}, {len(it['body'])}자)")
         print(f"[push:dry-run] business_id={business_id} 대상 {len(items)}건, 규약 위반 {len(errors)}건")
         return 1 if errors else 0
-    out = cfg.post("/api/cases/push", {"business_id": business_id, "items": items})
-    up, sk = out.get("upserted", 0), out.get("skipped", 0)
+    # 대량 push 는 청크로 나눈다(#562 P2) — 단일 POST 는 nginx 본문 한도(413)에 걸린다.
+    # 청크 단위 POST 는 멱등(hash 동일 skip)이라 중간 실패 후 재실행이 안전하다.
+    chunk = max(1, int(chunk or 50))
+    up = sk = 0
+    for i in range(0, len(items), chunk):
+        part = items[i:i + chunk]
+        out = cfg.post("/api/cases/push", {"business_id": business_id, "items": part})
+        up += out.get("upserted", 0)
+        sk += out.get("skipped", 0)
+        if len(items) > chunk:
+            print(f"[push] 진행 {min(i + chunk, len(items))}/{len(items)}…")
     print(f"[push] business_id={business_id}: upserted={up} skipped={sk}"
           + (f" · 규약 위반 제외 {len(errors)}건" if errors else ""))
     return 1 if errors else 0
@@ -364,9 +409,11 @@ def cmd_pull(cfg, root, business_arg, host_filter):
             cdir = os.path.join(root, PUBLIC_DIR, owner, host, feature, name)
         os.makedirs(cdir, exist_ok=True)
         path = os.path.join(cdir, CASE_FILE)
-        body = item.get("body") or ""
+        # 서버 visibility 컬럼을 frontmatter 에 병합(#563 P1) — 웹 전환은 컬럼만 바꾸고
+        # blob 은 push 원문이라, 병합 없이는 본문 hash 동일 = skip 으로 전환이 영영 안 내려온다.
+        body = apply_server_visibility(item.get("body") or "", item.get("visibility"))
         if os.path.exists(path):
-            with open(path, encoding="utf-8") as fh:
+            with open(path, encoding="utf-8-sig") as fh:
                 if content_hash(fh.read()) == content_hash(body):
                     skipped += 1  # 무변경 — no-op(멱등)
                     continue
@@ -482,6 +529,25 @@ def cmd_selftest():
     check(_item_is_mine({"mine": True}, "me") is True, "mine 필드 우선")
     check(_item_is_mine({"owner": "me"}, "me") is True, "owner==whoami → 내 것")
     check(_item_is_mine({"owner": "alice"}, "me") is False, "owner≠whoami → 남의 것")
+
+    # 5) 서버 visibility 병합(#563 P1) — 전환의 소유는 서버/웹 선별
+    merged = apply_server_visibility(sample, "private")
+    mf, mb = parse_frontmatter(merged)
+    check(mf.get("visibility") == "private", "visibility 병합: public→private")
+    check(mb == parse_frontmatter(sample)[1], "visibility 병합: 본문 불변")
+    check(apply_server_visibility(sample, "public") is sample, "visibility 병합: 동일값 no-op")
+    novis = sample.replace("visibility: public\n", "")
+    check(parse_frontmatter(apply_server_visibility(novis, "private"))[0].get("visibility") == "private",
+          "visibility 병합: 줄 없으면 삽입")
+
+    # 6) BOM 허용(#562 P3)
+    bf, _ = parse_frontmatter("\ufeff" + sample)
+    check(bf.get("name") == "chat-send", "BOM 붙은 frontmatter 파싱")
+    put("localhost-5151/forge/bom-case/case.md",
+        "\ufeff" + sample.replace("name: chat-send", "name: bom-case"))
+    valid2, errors2 = scan_local_cases(root)
+    check(any(v["name"] == "bom-case" for v in valid2), "BOM 붙은 케이스 스캔 통과")
+    check(len(errors2) == 1, "BOM 이 규약 위반으로 오인되지 않음")
     regenerate_index(root)
     with open(os.path.join(root, "INDEX.md"), encoding="utf-8") as fh:
         idx = fh.read()
@@ -510,6 +576,8 @@ def main():
         sp.add_argument("--cases-dir", default=None, help="케이스 루트 직접 지정(테스트용)")
     sub.choices["push"].add_argument("--dry-run", action="store_true",
                                      help="POST 없이 보낼 목록만 출력")
+    sub.choices["push"].add_argument("--chunk", type=int, default=50,
+                                     help="POST 당 케이스 수(기본 50) — 대량 push 413 회피(#562 P2)")
     sp = sub.add_parser("slug", help="URL/host[:port] → 호스트 슬러그(규칙 단일 출처)")
     sp.add_argument("target")
     sub.add_parser("selftest")
@@ -525,7 +593,7 @@ def main():
     root = args.cases_dir or cases_root()
     cfg = Config()
     if args.cmd == "push":
-        return cmd_push(cfg, root, args.business, args.host, args.dry_run)
+        return cmd_push(cfg, root, args.business, args.host, args.dry_run, args.chunk)
     if args.cmd == "pull":
         return cmd_pull(cfg, root, args.business, args.host)
     return 1
