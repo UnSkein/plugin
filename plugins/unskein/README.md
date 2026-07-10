@@ -39,6 +39,16 @@
 | `UNSKEIN_LOOP_INTERVAL` | `30` | (watch) 빈 폴링 시 대기 초 |
 | `UNSKEIN_LOOP_MAX_EMPTY` | `0` | (watch) 연속 빈 폴링 N회 후 종료, 0=무한 |
 
+## 설치 가이드 (역할별)
+
+역할별 상세 설치 문서가 `docs/` 에 동봉된다(설치 후 `${CLAUDE_PLUGIN_ROOT}/docs/`):
+
+| 역할 | 문서 |
+|------|------|
+| 실행기(EXECUTOR — WSL 헤드리스, 멀티 프로젝트) | [docs/익스큐터설치_멀티프로젝트.md](docs/익스큐터설치_멀티프로젝트.md) |
+| 플래너(PLANNER — 스코프·WBS 등록) | [docs/플래너설치.md](docs/플래너설치.md) |
+| 테스터(TESTER — 윈도우 CDP 화면검증) | [docs/테스터설치_단일프로젝트.md](docs/테스터설치_단일프로젝트.md) |
+
 ## 사용법
 
 ### Claude Code 안에서 (command)
