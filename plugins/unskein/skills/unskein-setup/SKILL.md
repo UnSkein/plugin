@@ -1,19 +1,58 @@
 ---
 name: unskein-setup
-description: 실행기(WSL distro)를 한 프로젝트용으로 한 번에 세운다 — 서버 연결·인증(executor.env 단일 파일) + 런타임·의존성 설치 + repo 클론 + 프로비저닝 검증·보완. 자격증명(토큰·SSH 키) 갱신도 재실행으로. connect·add-site 를 통합했다. TESTER(kind=tester)도 프로비저닝한다 — 프로젝트별 tester.ps1·CDP 프로필/포트·cases 번들로 한 윈도우 호스트가 여러 프로젝트 TEST 를 격리 담당(§T). 각 단계 idempotent(이미 된 건 스킵). 트리거 — 실행기 셋업, unskein-setup, 서버 연결, 클라이언트 연결, UnSkein 셋업, 모리 토큰 등록, 프로젝트 등록, 프로젝트 추가, 사이트 추가, 자격증명 갱신, 토큰 갱신, 토큰 회전, 토큰 교체, SSH 키 교체, 호스트 추가, 프로비저닝, 클론 검증, 런타임 설치, 프로젝트 격리, UNSKEIN_HOME, 다중 프로젝트, 상태 격리, TESTER 셋업, tester 프로비저닝, 화면검증기 셋업, tester.ps1, CDP 프로필, 멀티 프로젝트 TEST, 병렬 검증 격리, 테스터 토큰 발급, 멤버십 추가.
+description: 셋업 단일 진입점 — 토큰만 있으면 시작한다. 역할을 몰라도 서버가 토큰 종류(kind)로 판별해(R0, /api/whoami · ADR-0027) EXECUTOR/PLANNER/TESTER 절차로 분기한다. 실행기(WSL distro)를 한 프로젝트용으로 한 번에 세운다 — 서버 연결·인증(executor.env 단일 파일) + 런타임·의존성 설치 + repo 클론 + 프로비저닝 검증·보완. 자격증명(토큰·SSH 키) 갱신도 재실행으로. connect·add-site 를 통합했다. TESTER(kind=tester)도 프로비저닝한다 — 프로젝트별 tester.ps1·CDP 프로필/포트·cases 번들로 한 윈도우 호스트가 여러 프로젝트 TEST 를 격리 담당(§T). PLANNER 는 동봉 가이드로 이어 진행. 각 단계 idempotent(이미 된 건 스킵). 트리거 — 실행기 셋업, unskein-setup, 처음 시작, 온보딩, 역할 판별, 토큰 받음, whoami, 서버 연결, 클라이언트 연결, UnSkein 셋업, 모리 토큰 등록, 프로젝트 등록, 프로젝트 추가, 사이트 추가, 자격증명 갱신, 토큰 갱신, 토큰 회전, 토큰 교체, SSH 키 교체, 호스트 추가, 프로비저닝, 클론 검증, 런타임 설치, 프로젝트 격리, UNSKEIN_HOME, 다중 프로젝트, 상태 격리, TESTER 셋업, tester 프로비저닝, 화면검증기 셋업, tester.ps1, CDP 프로필, 멀티 프로젝트 TEST, 병렬 검증 격리, 테스터 토큰 발급, 멤버십 추가.
 ---
 
 # UnSkein — 실행기·검증기 셋업 (프로젝트별)
 
 이 실행기(WSL distro)를 **한 프로젝트**를 처리할 수 있게 한 번에 세운다 — 서버 연결·인증부터 클론·의존성·검증까지. **1 watch 세션 = 1 프로젝트.** 한 distro 에서 여러 프로젝트를 돌리려면 프로젝트 디렉토리마다 상태 루트를 격리해(`UNSKEIN_HOME=<프로젝트>/.unskein` — S0, ADR-0020) 이 셋업을 반복한다: 코드(플러그인)는 전역 1벌 공유, 상태(env·creds·work)만 프로젝트별로 갈라진다. 클라이언트 주인(사용자)과 대화하며 진행한다.
 
-> **이 스킬은 두 종류의 워커를 프로비저닝한다**: **EXECUTOR**(kind=mori · WSL 헤드리스 · 코드개발까지 — 아래 **S0–S4**) 와 **TESTER**(kind=tester · 윈도우 네이티브 · CDP 화면검증 — **§T**). S0–S4 는 EXECUTOR 기준이고, TESTER 는 §T 에서 같은 `UNSKEIN_HOME`-식 상태 격리를 **윈도우/PowerShell·프로젝트별 번들**로 편다(한 윈도우 호스트가 여러 프로젝트 TEST 를 로그인·토큰·포트·산출물 안 섞이게 담당). EXECUTOR 만 세우면 S0–S4 로 충분하고, TESTER 만이면 §T 로 바로 간다.
+> **이 스킬이 셋업의 단일 진입점이다.** 역할을 모르면 **R0**(토큰 → 서버 판별)부터. 직접 프로비저닝은 두 종류 — **EXECUTOR**(kind=mori · WSL 헤드리스 · 코드개발까지 — 아래 **S0–S4**) 와 **TESTER**(kind=tester · 윈도우 네이티브 · CDP 화면검증 — **§T**). S0–S4 는 EXECUTOR 기준이고, TESTER 는 §T 에서 같은 `UNSKEIN_HOME`-식 상태 격리를 **윈도우/PowerShell·프로젝트별 번들**로 편다(한 윈도우 호스트가 여러 프로젝트 TEST 를 로그인·토큰·포트·산출물 안 섞이게 담당). **PLANNER**(kind=planner)는 동봉 가이드(`${CLAUDE_PLUGIN_ROOT}/docs/플래너설치.md`)를 이 세션이 이어서 진행한다. 역할을 이미 알면 S0/§T/플래너 문서로 직행해도 된다.
 
 - **각 단계는 idempotent** — 이미(수동으로) 된 건 감지해 **건너뛰고**, 안 된 것만 처리한다. 값이 빠지면 임의로 채우지 말고 **물어서 멈춘다**(fallback 금지).
 - 비밀(토큰·키)은 화면·셸 기록에 남기지 않는다. 저장소 주소·git 설정에 토큰을 넣지 않는다.
 - **전제**: 플러그인이 이 WSL distro 의 `claude` 에 **user 스코프**로 설치돼 있어야 한다(오케스트레이터·다오 스킬 원본이 `${CLAUDE_PLUGIN_ROOT}` 옆에서 돈다). 윈도우에만 있고 distro 엔 없으면 워커가 스킬을 못 찾는다.
 
 > **범위 밖(별도)**: 실행기는 **개발까지**(다오가 코드검증=타입체크·빌드·유닛테스트) 준비한다. 화면·런타임 검증(TESTER)은 **머지 후 배포된 테스트서버**를 대상으로 하는 별도 단계다 — `docs/architecture/실행기-개발-검증-흐름.md` 참조. 그래서 이 셋업은 **앱을 기동하지 않는다.**
+
+## R0. 진입 — 토큰으로 역할 판별 (매뉴얼 없이 시작, ADR-0027)
+
+처음 시작하는 사용자에게 필요한 것은 셋뿐이다: **Claude Code + 이 플러그인 + 관리자가 보내준 토큰**. 자기 역할(익스큐터/플래너/테스터)은 몰라도 된다 — 역할은 토큰 발급 시점에 kind 로 이미 선언됐고(ADR-0013), 서버가 알려준다. **사람에게 역할을 되묻지 않는다.**
+
+1. **입수 파일(부트스트랩) 작성**: 세션 실행 루트에 `.unskein/setup.env` 를 만들어(권한 600) 관리자에게 받은 두 값을 **사용자가 편집기로 직접** 넣는다:
+   ```
+   UNSKEIN_API=https://<서버>
+   UNSKEIN_TOKEN=<관리자가 보낸 토큰>
+   ```
+   - 🔒 **토큰 값은 대화(프롬프트)에도 붙여넣지 않는다** — 대화는 세션 기록으로 디스크에 남고 모델 컨텍스트로도 나간다. 셸 인자·화면 출력도 같은 이유로 금지. 유일한 경로는 "편집기 → 파일".
+   - ⚠️ 루트 바로 밑 `.env` 가 아니라 **`.unskein/` 아래**다 — 코드베이스(리포) 안에서 실행해도 커밋에 안 섞이고, 상태 루트 규약(ADR-0020/0021)과 한 자리다. 윈도우(테스터 후보) 세션이면 `%USERPROFILE%\.unskein\setup.env`.
+   - 이 파일은 **입수용 임시본**이지 최종 저장소가 아니다 — 5에서 역할 정본으로 옮긴 뒤 지운다.
+2. **역할 판별** (역할 중립 헤더 — 어떤 kind 든 이 라우트가 받는다). 세션은 **값을 열람·출력하지 않는다**(`cat` 금지) — 셸이 파일을 읽어 변수로 올리고, 명령은 변수 참조로만 쓴다:
+   ```bash
+   # WSL/bash
+   set -a; . .unskein/setup.env; set +a
+   curl -s "$UNSKEIN_API/api/whoami" -H "X-Unskein-Token: $UNSKEIN_TOKEN"
+   # → {"ok":true,"kind":"mori","name":"<토큰 라벨>","user":"<소유자>"}
+   ```
+   ```powershell
+   # 윈도우/PowerShell — 값 미출력 로더
+   Get-Content "$env:USERPROFILE\.unskein\setup.env" | % { if ($_ -match '^(\w+)=(.*)$') { Set-Item "env:$($matches[1])" $matches[2] } }
+   curl.exe -s "$env:UNSKEIN_API/api/whoami" -H "X-Unskein-Token: $env:UNSKEIN_TOKEN"
+   ```
+3. **kind 로 분기**:
+   - **`mori`** (EXECUTOR — 개발 실행기) → 아래 **S0–S4** 로 계속. 이 토큰이 S1 의 `UNSKEIN_MORI_TOKEN` 이다.
+   - **`tester`** (TESTER — 화면검증, **윈도우**) → **§T** 로. 지금 세션이 WSL 이면 프로비저닝 대상은 윈도우 호스트 쪽임을 안내한다(CDP Chrome 은 윈도우 프로세스).
+   - **`planner`** (PLANNER — 스코프·플랜 등록) → 동봉 가이드 `${CLAUDE_PLUGIN_ROOT}/docs/플래너설치.md` 절차를 **이 세션이 이어서 진행**한다(planner.env 작성 — 템플릿 `${CLAUDE_PLUGIN_ROOT}/templates/planner.env.sample` — + 코드베이스 clone 검증). 이 토큰이 `UNSKEIN_PLANNER_TOKEN` 이다.
+4. **오류 처리** (fallback 금지 — 조용히 넘기지 않는다):
+   - **401** = 토큰 무효(오타·폐기·비활성) → 관리자에게 재발급/확인 요청. kind 를 추측해 진행하지 않는다.
+   - **404**(라우트 없음) = 구서버(whoami 미배포) → 사용자에게 역할을 **명시적으로 묻고** 답에 따라 분기한다(드러난 질문이지 폴백이 아니다).
+   - 연결 실패 = 서버 주소·네트워크부터 확인.
+5. **승격·정리** (해당 역할 절차 안에서 수행): 토큰을 역할 **정본**으로 옮겨 적은 뒤 `setup.env` 는 **삭제**한다 — 같은 비밀을 두 곳에 남기지 않는다(무잔존·역할별 단일 파일).
+   - mori → `$UHOME/executor.env` 의 `UNSKEIN_MORI_TOKEN` (S1). setup.env 를 만든 `.unskein` 이 그대로 `UNSKEIN_HOME` 이면 같은 폴더 안 이동이다.
+   - planner → `<작업폴더>/.unskein/planner.env` 의 `UNSKEIN_PLANNER_TOKEN`.
+   - tester → 정본은 **윈도우 번들** `%USERPROFILE%\.unskein\<business>__<project>\tester.ps1` 의 `$env:UNSKEIN_MORI_TOKEN`(§T — bash env 파일이 아니다). 옮겨 적고 setup.env(WSL 쪽이었다면 그쪽 파일)를 삭제한다.
+
+**디렉토리 구성은 이 판별 뒤에 나온다** — 역할이 정해져야 산출물(executor.env / planner.env / 테스터 번들)이 정해진다(설치 가이드 3종·다이어그램 "역할별 디렉토리 구성" 참조). 사용자가 미리 만들 것은 입수 파일 하나뿐이다.
 
 ## S0. 배치 모드 — 상태 루트(`UNSKEIN_HOME`) 확정
 
