@@ -29,9 +29,10 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 import run_once
 from run_once import (
-    _claim_body,
+    WatchScopeError,
     _post,
     apply_watch_args,
+    claim_once,
     parse_watch_args,
     process_task,
     resolve_watch_scope,
@@ -42,10 +43,10 @@ for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(encoding="utf-8")
 
-# watch 대상 키워드(bis/prj 등)를 먼저 뽑아 env 보다 우선 적용하고,
+# watch 대상 키워드(bis/prj/task 등)를 먼저 뽑아 env 보다 우선 적용하고,
 # 남은 위치 인자만 INTERVAL/MAX_EMPTY 로 쓴다(기존 위치 인자 호환).
-_wb, _wp, _positionals = parse_watch_args(sys.argv[1:])
-apply_watch_args(_wb, _wp)
+_wb, _wp, _wt, _positionals = parse_watch_args(sys.argv[1:])
+apply_watch_args(_wb, _wp, _wt)
 
 INTERVAL = int(os.getenv("UNSKEIN_LOOP_INTERVAL", "30"))
 MAX_EMPTY = int(os.getenv("UNSKEIN_LOOP_MAX_EMPTY", "0"))
@@ -151,7 +152,12 @@ def main() -> int:
             # 여유 슬롯 — 새 작업 선점 시도.
             tick += 1
             try:
-                claim = _post("/api/mori/claim", _claim_body())
+                claim = claim_once()
+            except WatchScopeError as exc:
+                # watch 대상 오류(대상 없음/범위 밖/구서버) — 재시도해도 같으니 새 선점을
+                # 멈추고 루프를 종료한다(진행 중 작업은 아래에서 마저 기다린다).
+                print(f"[tick {tick}] watch 대상 오류 — 폴링 중단: {exc}", flush=True)
+                break
             except Exception as exc:  # noqa: BLE001 — backend 일시 장애로 루프 중단 안 함.
                 print(f"[tick {tick}] claim 실패: {exc} — {INTERVAL}s 후 재시도", flush=True)
                 empty_streak = 0  # 장애는 빈 tick 으로 세지 않는다.

@@ -118,8 +118,8 @@ def cmd_prepare(argv: list[str]) -> int:
         print("UNSKEIN_MORI_TOKEN 이 필요합니다 — executor.env 를 source 하세요.")
         return 1
     # watch 대상 — 인자가 env 보다 우선(run_once.main 과 동일).
-    b, p, _ = ro.parse_watch_args(argv)
-    ro.apply_watch_args(b, p)
+    b, p, t, _ = ro.parse_watch_args(argv)
+    ro.apply_watch_args(b, p, t)
     ok, label = ro.resolve_watch_scope()
     if not ok:
         print(f"[watch] {label}")
@@ -136,7 +136,12 @@ def cmd_prepare(argv: list[str]) -> int:
 
     ro.gc_work_root()
 
-    claim = ro._post("/api/mori/claim", ro._claim_body())
+    # watch 대상 오류(대상 없음/범위 밖/구서버)는 claim_once 가 WatchScopeError 로 드러낸다.
+    try:
+        claim = ro.claim_once()
+    except ro.WatchScopeError as exc:
+        print(f"[watch] {exc}")
+        return 1
     if not claim.get("claimed"):
         print("NO_TASK: 선점할 작업이 없습니다 (대상 범위 내 plan/answered 0건).")
         return 0
