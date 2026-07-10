@@ -8,7 +8,7 @@
       "name": "unskein",
       "source": "./plugins/unskein",
       "description": "모리·다오 실행 엔진 (오케스트레이터 + 실행 명령 + 자식 출력 규약)",
-      "version": "1.35.0"
+      "version": "1.36.0"
     }
   ]
 }

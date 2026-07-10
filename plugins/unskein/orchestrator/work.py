@@ -15,9 +15,14 @@ run_once 의 배관을 그대로 재사용한다 — claim·스킬 이식·clone
   prepare [watch args]   작업 1건 claim + 셋업(스킬 이식·clone·프롬프트 산출). 프롬프트와
                          작업 폴더를 출력하고, 세션이 오래 작업해도 claim lease 가 안 풀리게
                          **백그라운드 heartbeat 데몬**을 띄운다. 없으면 'NO_TASK'.
-  report <task_id> [--marker-file F]
+                         수동 모드라 **test 단계도 집는다**(항상 auto_advance_test) — test 는
+                         CDP 화면검증(unskein-test)으로 수행해 inspect/plan 으로 옮긴다.
+                         특정 작업만 하려면 `prepare task <id>` (ADR-0026 서브트리 스코프).
+  report <task_id> [--marker-file F] [--payload-file P]
                          세션이 낸 RESULT/QUESTION 마커(파일 또는 stdin)를 읽어 회수
                          (report/question) + heartbeat 정지 + (done 이면) 작업폴더 정리.
+                         --payload-file 은 단계 구조화 산출물(JSON — 예: 수동 test 의
+                         CDP 검증 결과)을 task.payload[<출발단계>] 로 싣는다.
   heartbeat <task_id>    (내부) prepare 가 띄우는 heartbeat 루프. SIGTERM 까지 찍는다.
   release <task_id>      보고 없이 heartbeat 만 정지(중단 정리).
 
@@ -117,6 +122,10 @@ def cmd_prepare(argv: list[str]) -> int:
     if not ro.MORI_TOKEN:
         print("UNSKEIN_MORI_TOKEN 이 필요합니다 — executor.env 를 source 하세요.")
         return 1
+    # 수동(함께 작업)은 전 단계를 이 세션이 처리한다 — test 카드도 집어 CDP 화면검증
+    # (unskein-test)으로 옮긴다. 자율 루프의 ADR-0016 opt-in(env)과 달리 수동은 항상 켠다:
+    # 운영자가 실제 화면을 보며 검증하므로 코드검증만 하는 헤드리스 opt-in 보다 강하다.
+    ro.AUTO_ADVANCE_TEST = True
     # watch 대상 — 인자가 env 보다 우선(run_once.main 과 동일).
     b, p, t, _ = ro.parse_watch_args(argv)
     ro.apply_watch_args(b, p, t)
@@ -205,6 +214,13 @@ def cmd_prepare(argv: list[str]) -> int:
     print("\n===== DAO PROMPT (이 세션이 다오로서 수행) =====")
     print(prompt)
     print("===== END PROMPT =====")
+    if status == "test":
+        # 수동 test = 화면검증 — 코드검증이 아니라 CDP 로 실제 화면을 확인해 옮긴다.
+        print(
+            "\n[test] 이 단계는 CDP 화면검증으로 수행한다(unskein-test §1–7 — WSL 세션이면 "
+            "powershell.exe/윈도우 Node 로 호출). PASS → RESULT: status=inspect, "
+            "FAIL → RESULT: status=plan. 검증 결과 구조는 report --payload-file 로 싣는다."
+        )
     print(
         f"\n다음: WORK_DIR 로 들어가 이식된 다오 스킬(../CLAUDE.md + ../.claude/skills/)을 "
         f"따라 위 프롬프트를 수행한 뒤, 최종 RESULT:/QUESTION: 마커를 파일로 저장하고 "
@@ -215,12 +231,19 @@ def cmd_prepare(argv: list[str]) -> int:
 
 # ---- report: 마커 → 회수 ----
 
-def cmd_report(task_id: int, marker_file: str | None) -> int:
+def cmd_report(task_id: int, marker_file: str | None, payload_file: str | None = None) -> int:
     if marker_file:
         with open(marker_file, encoding="utf-8") as f:
             result_text = f.read()
     else:
         result_text = sys.stdin.read()
+
+    # 단계 구조화 산출물(선택) — 서버가 task.payload[<출발단계>] 에 저장한다.
+    # 수동 test(CDP 화면검증) 결과를 unskein-test §0.3 구조로 실을 때 쓴다.
+    payload = None
+    if payload_file:
+        with open(payload_file, encoding="utf-8") as f:
+            payload = json.load(f)
 
     meta = {}
     try:
@@ -239,17 +262,17 @@ def cmd_report(task_id: int, marker_file: str | None) -> int:
         ro._post(f"/api/mori/tasks/{task_id}/question", {"question": summary})
     elif kind == "result":
         print(f"[report] RESULT → status={status} stage={stage} summary={summary}")
-        ok = ro._post_report(
-            task_id,
-            {
-                "summary": summary,
-                "session_id": None,
-                "transcript_path": None,
-                "status": status,
-                "stage": stage,
-                "doc": doc,
-            },
-        )
+        body = {
+            "summary": summary,
+            "session_id": None,
+            "transcript_path": None,
+            "status": status,
+            "stage": stage,
+            "doc": doc,
+        }
+        if payload is not None:
+            body["payload"] = payload
+        ok = ro._post_report(task_id, body)
         if not ok:
             print("[report] 보고 실패 — status 유지, 재처리가 이 단계를 재실행한다.")
             return 1
@@ -290,8 +313,10 @@ def main() -> int:
         ap = argparse.ArgumentParser(prog="work.py report")
         ap.add_argument("task_id", type=int)
         ap.add_argument("--marker-file", default=None)
+        ap.add_argument("--payload-file", default=None,
+                        help="단계 구조화 산출물 JSON (예: 수동 test 의 CDP 검증 결과 — unskein-test §0.3)")
         a = ap.parse_args(rest)
-        return cmd_report(a.task_id, a.marker_file)
+        return cmd_report(a.task_id, a.marker_file, a.payload_file)
     if cmd == "release":
         if not rest:
             print("사용: work.py release <task_id>")
