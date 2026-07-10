@@ -1,6 +1,6 @@
 ---
 name: unskein-setup
-description: 셋업 단일 진입점 — 토큰만 있으면 시작한다(~/.unskein/setup.env, 호출 위치 무관). 역할을 몰라도 서버가 토큰 종류(kind)로 판별해(R0, /api/whoami · ADR-0027) EXECUTOR/PLANNER/TESTER 절차로 분기하고, 설치할 프로젝트도 멤버십 목록(whoami businesses)을 질문창으로 띄워 고르게 하며, 작업 디렉토리도 이름을 물어 셋업이 만든다. 실행기(WSL distro)를 한 프로젝트용으로 한 번에 세운다 — 서버 연결·인증(executor.env 단일 파일) + 런타임·의존성 설치 + repo 클론 + 프로비저닝 검증·보완. 자격증명(토큰·SSH 키) 갱신도 재실행으로. connect·add-site 를 통합했다. TESTER(kind=tester)도 프로비저닝한다 — 프로젝트별 tester.ps1·CDP 프로필/포트·cases 번들로 한 윈도우 호스트가 여러 프로젝트 TEST 를 격리 담당(§T). PLANNER 는 동봉 가이드로 이어 진행. 각 단계 idempotent(이미 된 건 스킵). 트리거 — 실행기 셋업, unskein-setup, 처음 시작, 온보딩, 역할 판별, 토큰 받음, whoami, 서버 연결, 클라이언트 연결, UnSkein 셋업, 모리 토큰 등록, 프로젝트 등록, 프로젝트 추가, 사이트 추가, 자격증명 갱신, 토큰 갱신, 토큰 회전, 토큰 교체, SSH 키 교체, 호스트 추가, 프로비저닝, 클론 검증, 런타임 설치, 프로젝트 격리, UNSKEIN_HOME, 다중 프로젝트, 상태 격리, TESTER 셋업, tester 프로비저닝, 화면검증기 셋업, tester.ps1, CDP 프로필, 멀티 프로젝트 TEST, 병렬 검증 격리, 테스터 토큰 발급, 멤버십 추가.
+description: 셋업 단일 진입점 — 토큰만 있으면 시작한다(~/.unskein/setup.env 에 토큰 값 한 줄, 호출 위치 무관). 역할을 몰라도 서버가 토큰 종류(kind)로 판별해(R0, /api/whoami · ADR-0027) EXECUTOR/PLANNER/TESTER 절차로 분기하고, 설치할 프로젝트도 멤버십 목록(whoami businesses)을 질문창으로 띄워 고르게 하며, 작업 디렉토리도 이름을 물어 셋업이 만든다. 실행기(WSL distro)를 한 프로젝트용으로 한 번에 세운다 — 서버 연결·인증(executor.env 단일 파일) + 런타임·의존성 설치 + repo 클론 + 프로비저닝 검증·보완. 자격증명(토큰·SSH 키) 갱신도 재실행으로. connect·add-site 를 통합했다. TESTER(kind=tester)도 프로비저닝한다 — 프로젝트별 tester.ps1·CDP 프로필/포트·cases 번들로 한 윈도우 호스트가 여러 프로젝트 TEST 를 격리 담당(§T). PLANNER 는 동봉 가이드로 이어 진행. 각 단계 idempotent(이미 된 건 스킵). 트리거 — 실행기 셋업, unskein-setup, 처음 시작, 온보딩, 역할 판별, 토큰 받음, whoami, 서버 연결, 클라이언트 연결, UnSkein 셋업, 모리 토큰 등록, 프로젝트 등록, 프로젝트 추가, 사이트 추가, 자격증명 갱신, 토큰 갱신, 토큰 회전, 토큰 교체, SSH 키 교체, 호스트 추가, 프로비저닝, 클론 검증, 런타임 설치, 프로젝트 격리, UNSKEIN_HOME, 다중 프로젝트, 상태 격리, TESTER 셋업, tester 프로비저닝, 화면검증기 셋업, tester.ps1, CDP 프로필, 멀티 프로젝트 TEST, 병렬 검증 격리, 테스터 토큰 발급, 멤버십 추가.
 ---
 
 # UnSkein — 실행기·검증기 셋업 (프로젝트별)
@@ -19,26 +19,26 @@ description: 셋업 단일 진입점 — 토큰만 있으면 시작한다(~/.uns
 
 처음 시작하는 사용자에게 필요한 것은 셋뿐이다: **Claude Code + 이 플러그인 + 관리자가 보내준 토큰**. 자기 역할(익스큐터/플래너/테스터)은 몰라도 된다 — 역할은 토큰 발급 시점에 kind 로 이미 선언됐고(ADR-0013), 서버가 알려준다. **사람에게 역할을 되묻지 않는다.**
 
-1. **입수 파일(부트스트랩) 작성 — 위치 고정 `~/.unskein/setup.env`**: 홈 상태 루트에 만들어(없으면 `mkdir -p ~/.unskein`, 파일 권한 600) 관리자에게 받은 두 값을 **사용자가 편집기로 직접** 넣는다:
+1. **입수 파일(부트스트랩) 작성 — 위치 고정 `~/.unskein/setup.env`**: 홈 상태 루트에 만들어(없으면 `mkdir -p ~/.unskein`, 파일 권한 600) 관리자에게 받은 **토큰 값 한 줄만** **사용자가 편집기로 직접** 넣는다 — KEY=VALUE 형식이 아니다(이 파일은 비밀 전달용이지 env 파일이 아니다):
    ```
-   UNSKEIN_API=https://<서버>
-   UNSKEIN_TOKEN=<관리자가 보낸 토큰>
+   unsk_…   ← 토큰 값 그대로 한 줄
    ```
    - 🔒 **토큰 값은 대화(프롬프트)에도 붙여넣지 않는다** — 대화는 세션 기록으로 디스크에 남고 모델 컨텍스트로도 나간다. 셸 인자·화면 출력도 같은 이유로 금지. 유일한 경로는 "편집기 → 파일".
+   - **서버 주소는 비밀이 아니다** — 파일에 넣지 않고 대화에서 묻는다(관리자 안내에 토큰과 함께 온 값).
    - 위치가 홈으로 고정이라 **스킬은 어느 디렉토리에서 호출해도 된다** — 작업 디렉토리는 4에서 셋업이 만들어 주므로 사용자가 미리 위치를 설계할 필요가 없다. 윈도우(테스터 후보) 세션이면 `%USERPROFILE%\.unskein\setup.env`.
    - 이 파일은 **입수용 임시본**이지 최종 저장소가 아니다 — 7에서 역할 정본으로 옮긴 뒤 지운다.
-2. **역할 판별** (역할 중립 헤더 — 어떤 kind 든 이 라우트가 받는다). 세션은 **값을 열람·출력하지 않는다**(`cat` 금지) — 셸이 파일을 읽어 변수로 올리고, 명령은 변수 참조로만 쓴다:
+2. **역할 판별** (역할 중립 헤더 — 어떤 kind 든 이 라우트가 받는다). 세션은 **값을 열람·출력하지 않는다**(`cat` 단독 실행 금지) — 셸이 파일을 읽어 변수로 올리고, 명령은 변수 참조로만 쓴다. 개행·공백은 제거한다(윈도우 편집기 CRLF 대비):
    ```bash
-   # WSL/bash
-   set -a; . ~/.unskein/setup.env; set +a
+   # WSL/bash — UNSKEIN_API 는 대화로 받은 서버 주소
+   UNSKEIN_TOKEN=$(tr -d '[:space:]' < ~/.unskein/setup.env)
    curl -s "$UNSKEIN_API/api/whoami" -H "X-Unskein-Token: $UNSKEIN_TOKEN"
    # → {"ok":true,"kind":"mori","name":"<토큰 라벨>","user":"<소유자>",
    #    "businesses":[{"name":"<비즈니스>","projects":[{"name":"<프로젝트>","repo_url":"<repo>"}]}]}
    ```
    ```powershell
    # 윈도우/PowerShell — 값 미출력 로더
-   Get-Content "$env:USERPROFILE\.unskein\setup.env" | % { if ($_ -match '^(\w+)=(.*)$') { Set-Item "env:$($matches[1])" $matches[2] } }
-   curl.exe -s "$env:UNSKEIN_API/api/whoami" -H "X-Unskein-Token: $env:UNSKEIN_TOKEN"
+   $token = (Get-Content -Raw "$env:USERPROFILE\.unskein\setup.env").Trim()
+   curl.exe -s "$env:UNSKEIN_API/api/whoami" -H "X-Unskein-Token: $token"
    ```
 3. **설치 대상 선택 (질문창)**: 응답의 `businesses`(이 토큰의 멤버십 = 설치 가능 범위)를 **질문창(AskUserQuestion)** 선택지로 띄워 "어느 프로젝트를 설치할지" 고르게 한다 — 라벨은 `<비즈니스> / <프로젝트>`, 항목이 하나뿐이면 그걸 권장으로 표시. 사용자에게 이름을 타이핑시키지 않는다(오타·이름 불일치 차단).
    - **목록이 비어 있으면**(`businesses: []`): 이 토큰 사용자가 어느 사이트의 멤버도 아니다 — 관리자에게 **멤버십 추가**를 요청하도록 안내하고 멈춘다(§T0-선결과 동종. 디렉토리를 만들어도 해결되지 않는다).
