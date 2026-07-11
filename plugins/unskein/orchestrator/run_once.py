@@ -892,12 +892,14 @@ def _is_local_api(api: str) -> bool:
 
 
 def autonomous_scope_block() -> str | None:
-    """자율 루프(watch)를 막아야 하는 위험 조합이면 사유를 돌려준다(아니면 None).
+    """범위 미지정 + 원격 서버 선점을 막아야 하는 위험 조합이면 사유를 돌려준다(아니면 None).
 
     범위 미지정(WATCH_BUSINESS·WATCH_PROJECT·WATCH_TASK 모두 없음) + 원격(테스트/프로덕션)
-    서버는 이 클라이언트가 전체 큐를 무제한 자율 선점(claim)하게 한다. 다오는 항상
+    서버는 이 클라이언트가 전체 큐에서 아무 작업이나 선점(claim)하게 한다. 다오는 항상
     --dangerously-skip-permissions 로 무인 실행되므로, 여러 클라이언트가 같은 큐를
-    동시에 물면 같은 task 를 두고 경쟁한다(이번 두 모리 사고). 명시 동의
+    동시에 물면 같은 task 를 두고 경쟁한다(이번 두 모리 사고). 이 위험은 선점하는
+    모든 진입점에 동일하다 — 자율 루프(watch)든 단발 run 이든 수동 prepare 든 한 건이라도
+    남의 범위를 집으면 사고다. 그래서 세 진입점 모두 이 가드를 통과해야 한다. 명시 동의
     (UNSKEIN_ALLOW_UNSCOPED=1) 없이는 막는다 — 범위를 지정해 단독 소유하게 한다.
     (task 서브트리 스코프(ADR-0026)도 단독 소유 범위로 인정한다.)
     """
@@ -905,7 +907,7 @@ def autonomous_scope_block() -> str | None:
     remote = not _is_local_api(API_BASE)
     if unscoped and remote and os.getenv("UNSKEIN_ALLOW_UNSCOPED") != "1":
         return (
-            f"범위 미지정(전체 큐) + 원격 서버({API_BASE}) 자율 루프는 막혀 있습니다 — "
+            f"범위 미지정(전체 큐) + 원격 서버({API_BASE}) 선점은 막혀 있습니다 — "
             "여러 클라이언트가 같은 큐를 경쟁하는 사고 방지. bis/prj(또는 task) 로 범위를 "
             "지정(권장)하거나, 의도적이면 UNSKEIN_ALLOW_UNSCOPED=1 로 명시 동의하세요."
         )
@@ -1505,6 +1507,13 @@ def main() -> int:
         print(f"[watch] {label}")
         return 1
     print(f"[watch] 대상: {label}")
+
+    # 범위 미지정 + 원격 서버 선점 가드 — 단발 run 도 한 건이라도 남의 범위를 집으면
+    # 사고다(run_loop 와 동일 가드). watch 만 막고 run 은 열어두면 문서와 어긋난다.
+    block = autonomous_scope_block()
+    if block:
+        print(f"[run] 시작 거부 — {block}")
+        return 1
 
     # preflight — 작업을 잡기 전에 클라이언트 준비 점검(미충족이면 선점 안 함).
     ok, lines = preflight()

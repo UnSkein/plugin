@@ -58,7 +58,7 @@ DELETE /api/tasks/{id}                    노드 삭제
 
 > 로컬을 DB로 직접 다룰 때는 `business`/`project`/`task` 모델을 쓰되, `parent_id`는 부모 wbs_code로 조회해 잡고, 멱등(같은 wbs_code 있으면 skip)하게 한다. (이름으로 조회 → DB·API 어디서 돌려도 이식 가능.) **함정**: `task.payload`는 NOT NULL — 직접 INSERT 시 `'{}'::jsonb` 를 넣어야 한다.
 
-**스콥/계획 본문은 `plan_doc`에 넣는다 — 이 스킬의 핵심 자리.** 한 노드의 스콥(수용 기준·계획 본문)은 **다음 단계(exec)가 읽는 `plan_doc` 필드**에 데이터로 주입한다. `PATCH /api/tasks/{id}` 의 `plan_doc`(로컬은 DB 직접)으로 set/edit 하며, **status 전이와 분리**한다 — 스콥을 넣어도 상태를 바꾸지 않는다. `/plan` 승인 엔드포인트(backlog→plan 강제 전이)는 쓰지 않는다(status·승인은 별개 단계·사람 몫). **스콥 *작성*은 이 스킬의 롤이 아니다** — 외부(다른 세션·`/unskein-scope` 스킬·사람)가 정의한 스콥을 받아 정확한 위치에 넣을 뿐이다(플랜을 포함한 스콥 생성 과정은 운영자가 관여). 웹 UI의 스콥 등록·편집도 같은 `plan_doc` PATCH 경로를 쓴다. **넣는 위치는 여기, 넣는 내용의 표준은 §4다.**
+**스콥/계획 본문은 `plan_doc`에 넣는다 — 이 스킬의 핵심 자리.** 한 노드의 스콥(수용 기준·계획 본문)은 **다음 단계(exec)가 읽는 `plan_doc` 필드**에 데이터로 주입한다. 부여는 두 갈래다(`unskein-scope` §5와 동일 규약) — **backlog에 두고 기록만**이면 `PATCH /api/tasks/{id}` 의 `plan_doc`(로컬은 DB 직접)으로 set/edit 한다(status 불변). **실행대기로 올리며 부여**면 `POST /api/tasks/{id}/plan`(attach_plan)을 쓴다 — `plan_doc` 저장 + `backlog→plan` 전이, 빈 `plan_doc`은 422/409로 거부(ADR-0009 게이트). **스콥 *작성*은 이 스킬의 롤이 아니다** — 외부(다른 세션·`/unskein-scope` 스킬·사람)가 정의한 스콥을 받아 정확한 위치에 넣을 뿐이다(플랜을 포함한 스콥 생성 과정은 운영자가 관여). 웹 UI의 스콥 등록·편집도 같은 `plan_doc` PATCH 경로를 쓴다. **넣는 위치는 여기, 넣는 내용의 표준은 §4다.**
 
 ## 4. plan_doc 자기완결 규약 — 카드 하나로 착수 가능
 
@@ -128,7 +128,7 @@ DELETE /api/tasks/{id}                    노드 삭제
 2. 노드를 **위상순서**(선행 먼저)로 정렬한다. 순환이 발견되면 멈추고 해당 노드를 보고한다(임의 배치 금지).
 3. 순서대로 각 리프의 `plan_start`/`plan_end`를 위 규칙으로 계산하고, 컨테이너는 자식 확정 뒤 스팬으로 채운다.
 4. 값을 쓴다 — 생성 시 `POST .../tasks`의 `plan_start`/`plan_end`(와 `dependencies`), 기존 노드 조정 시 `PATCH /api/tasks/{id}`.
-5. **status·plan_doc은 건드리지 않는다** — 일정 배치는 상태·스콥과 분리(§3 원칙 유지).
+5. **status·plan_doc은 건드리지 않는다** — 일정 배치는 상태·스콥과 별개 축이다(status 전이·plan_doc 부여는 §3의 두 갈래로만).
 
 ### 일정 조정(reflow) 모드
 

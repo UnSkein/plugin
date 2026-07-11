@@ -135,6 +135,14 @@ def cmd_prepare(argv: list[str]) -> int:
         return 1
     print(f"[watch] 대상: {label}")
 
+    # 범위 미지정 + 원격 서버 선점 가드 — 수동 prepare 도 claim 한 건을 잡으므로
+    # run/watch 와 같은 위험이다(SKILL.md 서술대로 거부). task/bis/prj 로 범위를 지정하면
+    # unscoped 가 아니라 통과한다. 의도적 전체 큐는 UNSKEIN_ALLOW_UNSCOPED=1.
+    block = ro.autonomous_scope_block()
+    if block:
+        print(f"[prepare] 시작 거부 — {block}")
+        return 1
+
     ok, lines = ro.preflight()
     print("[preflight] 작업 전 준비 점검:")
     for ln in lines:

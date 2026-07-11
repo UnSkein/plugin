@@ -19,8 +19,9 @@
 | skill | `unskein-case` | TESTER 검증 케이스(노하우)를 서버와 동기 — pull(내 것 + 같은 비즈니스 public)/push(내 것만, 무변경 skip). CLI 는 `bin/case-sync.py`, 로컬 루트 `$UNSKEIN_HOME/cases` |
 | skill | `unskein-work` | 헤드리스 `claude -p` 안 띄우고 **이 세션이 다오가 되어** 한 건 직접 처리 — **수동 진행 모드**(prepare task <id>·막힘 상태 정리·test 는 CDP 화면검증으로 전이, 운영자가 보며 조종 — 화면검증·첫 케이스·반복 실패 작업) |
 | 자식 규약 문서 | `orchestrator/CONTRACT.md` | 자식이 결과·질문을 오케스트레이터가 파싱할 약속 형식으로 출력하는 규약 |
-| 자식 다오 스킬 | `dao-skills/` | 모리가 작업마다 다오 작업 폴더(`WORK_ROOT`)로 복사해 **자식 다오에게** 깔아주는 운영 규약(`CLAUDE.md`) + 단계 스킬 7개. **모리 자신의 스킬이 아니다** — `skills/` 와 달리 plugin 이 로드하지 않고, `WORK_ROOT` 에서 띄운 자식 다오 세션만 읽는다. |
+| 자식 다오 스킬 | `dao-skills/` | 모리가 작업마다 다오 작업 폴더(`WORK_ROOT`)로 복사해 **자식 다오에게** 깔아주는 운영 규약(`CLAUDE.md`) + 스킬 6개(주: exec·verify·git, 보조: wiki-search·wiki-ingest·wiki-lint). **모리 자신의 스킬이 아니다** — `skills/` 와 달리 plugin 이 로드하지 않고, `WORK_ROOT` 에서 띄운 자식 다오 세션만 읽는다. |
 | 다오 스킬 카탈로그 | `DAO-SKILLS.md` | 모리가 보는 **다오wsl 스킬 목록·용도** 참조 정보 — 다오wsl(작업 다오)에 어떤 스킬이 있고 언제 쓰는지. `dao-skills/` 의 각 `SKILL.md` 에서 자동 생성한다(직접 고치지 않는다). |
+| docs | `docs/보고규칙.md` | 스킬·다오가 내는 답변·보고서의 서술 표준 — 사실 먼저·평범한 한국어·현상→원인→해결. 운영자 스킬의 보고 절과 `dao-skills/CLAUDE.md`(헤드리스 다오)가 이 표준을 가리킨다 |
 | bin | `unskein-once`, `unskein-loop` | 셸에서 직접 실행하는 래퍼 |
 | bin | `gen-dao-catalog.py` | `dao-skills/` 에서 `DAO-SKILLS.md` 를 생성·점검(`--check`)한다. dao-skills 변경 시 다시 돌려 동기화한다. |
 | bin | `planner-env.sh` | 플래너 스킬(scope·wbs·drawio·doctor)이 `source` 하는 인증 로드 — 프로젝트별 격리 `planner.env`(source 우선·cwd 폴백, ADR-0021)에서 `UNSKEIN_API`+`UNSKEIN_PLANNER_TOKEN` 을 올린다. |
