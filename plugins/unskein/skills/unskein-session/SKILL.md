@@ -82,6 +82,8 @@ python3 "${CLAUDE_PLUGIN_ROOT}/bin/memory-sync.py" push --codebase "$ROOT"
 
 ## Step 7: 보고
 
+보고 서술은 plugin `docs/보고규칙.md` 를 따릅니다 — 사실을 먼저, 평범한 한국어로, 미실행은 "미실행"으로 명시.
+
 ```
 대화연결 완료
 세션 요약: <repo>/docs/local/{파일명}.md
