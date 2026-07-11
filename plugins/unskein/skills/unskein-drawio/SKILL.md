@@ -47,7 +47,30 @@ curl -s "$UNSKEIN_API/api/projects/$PID/diagrams" \
 for d in json.load(sys.stdin): print(d["id"], d["kind"], repr(d["title"]))'
 ```
 
+## 2.1 번들 스크립트 — 권장 경로 (매번 curl/python 재작성 금지)
+
+인증·`/api` 보정·XML well-formed 검증·제목 `(id)` 2단계 마감을 한 곳에 모은 CLI 가 동봉돼 있다. **실무에선 이걸 쓴다** — 위 raw 엔드포인트는 무엇이 오가는지(계약)의 참조다. 인증만 먼저 로드하고(§1) 부른다:
+
+```bash
+. "${CLAUDE_PLUGIN_ROOT}/bin/planner-env.sh"          # UNSKEIN_API + planner 토큰 로드(§1)
+S="${CLAUDE_PLUGIN_ROOT}/skills/unskein-drawio/scripts/diagram_api.py"
+
+python3 "$S" projects --business <id|이름>             # project_id 를 모를 때: 이름→id (repo_url 동반)
+python3 "$S" list    --project <PID>                   # 활성 다이어그램 (id·kind·title)
+python3 "$S" get     <id> --xml-only > /tmp/bak.xml    # 수정 전 원본 백업(되돌리기용)
+python3 "$S" create  --project <PID> --title "제목" --xml new.xml   # POST + 제목 (id) 자동 마감
+python3 "$S" update  <id> --xml new.xml                # 보낸 필드만 PATCH (preview 미지정 = 썸네일 유지)
+python3 "$S" delete  <id> --yes                        # 소프트 삭제(사람 확인 후)
+python3 "$S" selftest                                  # 오프라인 자체검증(서버 불요)
+```
+
+- `create` 는 응답 id 로 제목 끝 `(id)` 를 자동으로 단다(§3, 멱등). `--xml` 은 보내기 전에 well-formed·5MB 를 검증하고 아니면 멈춘다(§4.4). 토큰이 없으면 조용히 넘기지 않고 exit 1(fallback 금지).
+- `--kind` 기본 `flow`. `preview_svg` 는 헤드리스로 억지 생성하지 않는다 — `update` 에서 `--preview` 를 빼면 옛 썸네일이 유지된다(§5).
+- **프로젝트는 이름으로 찾지 않는 게 원칙**(§1 — 지금 repo 가 곧 프로젝트). `projects` 하위명령은 그 매핑을 아직 못 정한 발견용 보조일 뿐, 확정되면 그 `project_id` 를 재사용한다.
+
 ## 3. 제목 끝 `(id)` 규약 — 다이어그램을 이름으로 특정 (필수)
+
+> 스크립트 `diagram_api.py create` 가 아래 2단계를 자동으로 한다(§2.1) — 이 절은 그 규약의 근거다.
 
 제목 끝에 그 다이어그램의 DB id 를 괄호로 단다 — 예: `내가 생각하는 구조도 (Claude 이해) (4)`. id 는 생성 뒤에야 정해지므로 **2단계**로 마감:
 
@@ -59,6 +82,8 @@ for d in json.load(sys.stdin): print(d["id"], d["kind"], repr(d["title"]))'
 - 이 규약은 표시 제목의 편의 식별자일 뿐 — 캔버스 안 heading(`mxCell id="title"`)이나 `<diagram name=…>` 은 건드리지 않는다.
 
 ## 4. 수정(가장 흔한 작업) — 안전 절차
+
+> `diagram_api.py get <id> --xml-only`(백업)·`update <id> --xml`(검증+부분 PATCH)가 아래 2·4·5 를 대행한다(§2.1). 편집(3)과 확인(6)은 여전히 사람/모델 몫.
 
 1. **찾기**: `GET …/projects/{PID}/diagrams` → 제목(§3 접미 id)으로 대상 id 확정.
 2. **원본 백업**: `GET /api/diagrams/{id}` → `drawio_xml` 을 스크래치패드에 저장(되돌리기용). preview_svg 유무 기록.
@@ -110,6 +135,7 @@ for d in json.load(sys.stdin): print(d["id"], d["kind"], repr(d["title"]))'
 
 ## 7. 체크리스트
 
+- [ ] 왕복은 번들 스크립트로(§2.1) — curl/python 손으로 다시 안 씀. `selftest` 로 로직 sanity.
 - [ ] 대상 프로젝트 = 지금 repo(unskein-scope §4 매핑, 이미 정했으면 재사용). 모호하면 질문(fallback 금지).
 - [ ] 인증 = `X-Planner-Token`(플래너 자기 토큰). admin 로그인 안 씀. 토큰 없으면 멈춤.
 - [ ] 수정 전 원본 `drawio_xml` 백업 + PATCH 전 XML well-formed 검증.
