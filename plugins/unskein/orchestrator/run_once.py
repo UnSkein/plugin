@@ -174,8 +174,9 @@ def _autoload_state_env() -> None:
     를 찾아 os.environ 에 올린다(ADR-0021 — 플래너 bin/planner-env.sh 와 같은 원칙:
     source 우선·cwd 폴백). 이미 UNSKEIN_MORI_TOKEN 이 있으면 명시적 source(또는 bashrc)를
     존중해 아무것도 안 한다. 못 찾으면 그대로 둔다(preflight 가 토큰 부재로 드러낸다).
-    주의: 전역 ~/.unskein 도 조상이면 여기서 잡히므로, 멀티프로젝트 이행 시 전역
-    ~/.unskein 은 .unskein_back 으로 무력화한다(preflight 가 점검·경고)."""
+    주의: source 를 안 하면 전역 ~/.unskein 도 조상이면 여기서 잡힌다 — 그래서 프로젝트
+    세션은 명시 source(또는 UNSKEIN_HOME 지정)로 전역과 격리한다(전역을 지울 필요는 없다).
+    preflight 는 활성 홈과 다른 전역 ~/.unskein 의 존재를 정보로만 보여준다."""
     if (os.getenv("UNSKEIN_MORI_TOKEN") or "").strip():
         return
     d = os.getcwd()
@@ -807,17 +808,17 @@ def preflight() -> tuple[bool, list[str]]:
     env_file = (os.getenv("UNSKEIN_ENV_FILE") or "").strip()
     if env_file:
         lines.append(f"  [경로] env 파일(cwd 폴백 로드): {env_file}")
-    # 전역 ~/.unskein 무력화 점검(ADR-0021) — 프로젝트 격리 모드(UNSKEIN_HOME 지정 또는
-    # cwd 폴백 로드)인데 전역 ~/.unskein 이 남아 있으면, cwd 폴백이 이를 조상으로 주워
-    # 엉뚱한 프로젝트 상태로 붙을 수 있다. 강력 권고: 멀티프로젝트면 전역을 .unskein_back 으로
-    # 개명(또는 삭제)해 무력화한다. (경고 — 단일 프로젝트 전역 배치는 정상이라 차단은 안 한다.)
+    # 전역 ~/.unskein 가시화(ADR-0021) — 활성 홈이 전역과 다르면(멀티프로젝트/격리) 상황과
+    # 조치를 함께 알린다. 이 세션은 이미 전역이 아닌 홈으로 붙어 전역은 이번 실행에 관여하지
+    # 않는다. 전역은 다른 역할(TESTER 등)·기존 설치의 상태 홈이라, 이 머신에서 그 역할을
+    # 운영하지 않으면 불필요한 잔재다(정리 가능 — 강제하지 않는다). 격리 자체는 삭제가 아니라
+    # 명시 source·UNSKEIN_HOME 로 한다.
     global_home = os.path.abspath(os.path.expanduser(os.path.join("~", ".unskein")))
-    if (home_set or env_file) and os.path.isdir(global_home) \
+    if os.path.isdir(global_home) \
             and os.path.realpath(global_home) != os.path.realpath(UNSKEIN_HOME):
-        check("전역 ~/.unskein 무력화(멀티프로젝트)", False,
-              f"{global_home} 잔존 — cwd 폴백이 조상으로 주울 수 있습니다. 멀티프로젝트면 "
-              f"`mv {global_home} {global_home}_back` 로 무력화(ADR-0021)",
-              critical=False)
+        lines.append(f"  [경로] 전역 ~/.unskein 도 존재: {global_home} — 활성 홈과 다르고 "
+                     "이번 세션엔 미관여. TESTER 등 다른 역할·기존 설치의 상태 홈이며, 이 "
+                     "머신에서 그 역할을 안 쓰면 불필요한 잔재(정리 가능)")
     split_state = False
     if home_set:
         # 정합 가드 — 루트를 지정했는데 개별 변수(UNSKEIN_CRED_DIR/UNSKEIN_WORK_ROOT,
