@@ -47,10 +47,11 @@ description: 작업이 완료(close)되면 검증 통과분과 지식 기록을 
 ## 6. 머지 (기본 = 자동)
 
 `UNSKEIN_AUTO_MERGE` 를 확인한다(`echo $UNSKEIN_AUTO_MERGE`). **`0`/`false`/`no`/`off` 가 아니면(미설정 포함) 자동 머지한다:**
+- **머지 전에 PR 체크 완주를 기다린다** — `gh pr checks <PR> --watch`. 체크가 아예 없으면(워크플로 미트리거) 바로 머지로 진행한다. **하나라도 실패면 머지하지 않는다** — private 무료 리포는 branch protection(required check)이 없어 GitHub 이 실패 체크로 머지를 막아주지 않으므로, 이 대기가 유일한 차단 지점이다(예: SaaS 의 mirror-check byte-diff 게이트 — orchestrator 미러 3파일의 SaaS↔plugin 불일치를 잡는다).
 - `gh pr merge <PR> --squash --delete-branch`. **필수 상태체크가 있으면** `--auto` 로 통과 시 머지되게 큐잉한다(즉시 머지 거부 시 `--auto` 재시도).
 - **머지가 막히면 다오가 직접 해결한다**(사람에게 안 넘긴다 — 자율 개발):
   - **충돌** → master 를 브랜치에 rebase/merge 해 충돌을 해결하고, 재검증(`unskein-verify`) 후 re-push → 다시 머지.
-  - **필수체크 실패** → 원인을 보고 **고쳐서**(개발자니까) 다시 검증·push·머지.
+  - **체크 실패(필수 여부 무관)** → 원인을 보고 **고쳐서**(개발자니까) 다시 검증·push·머지. 미러 불일치(mirror-check)면 상대 저장소 PR 을 먼저 머지해 맞춘다(plugin 먼저 → SaaS).
   - **권한·리포 정책(사람 승인 필수 등)** 처럼 코드가 아닌 **설정 문제로 구조적으로 못 하는 것만** 예외 — 토큰 머지 권한·branch protection 조정이 필요하니 **사유만 보고**한다.
   - 조용히 스킵(fallback) 금지 — **해결하거나, 못 하면 사유를 보고**(무한 반복은 안 함).
 - 머지 성공 시 next status 는 여전히 `done`(배포는 머지로 자동 트리거, 그 뒤 TESTER).
