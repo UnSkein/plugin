@@ -962,9 +962,12 @@ STAGE_INSTRUCTIONS = {
         "검증 결과 본문을 RESULT 마커의 <<<UNSKEIN_DOC 블록으로 보고하라."
     ),
     "inspect": (
-        "이번 단계: 기록·점검·마감. unskein-wiki-ingest 로 얻은 지식을 기록하고, "
-        "unskein-wiki-lint 로 문서 부패를 점검한 뒤, unskein-git 으로 feature 브랜치에 "
-        "커밋·push 하고 PR 을 만들어라. master 직접 머지·배포는 하지 않는다(머지되면 자동 배포)."
+        "이번 단계: 판단·기록·점검·마감. 먼저 이 카드가 실제로 한 일(구현 내역·result_doc·"
+        "커밋 diff·close_doc·이전 단계 기록)을 읽고, 다음 작업이 재사용할 지식(패턴·결정·함정)이 "
+        "있는지 스스로 판단하라. 있으면 unskein-wiki-ingest 로 그 지식을 기록하고, 없으면 억지로 "
+        "만들지 말고 RESULT 에 '기록할 지식 없음: <이유>' 한 줄만 남겨라. 그다음 unskein-wiki-lint "
+        "로 문서 부패를 점검한 뒤, unskein-git 으로 feature 브랜치에 커밋·push 하고 PR 을 만들어라. "
+        "master 직접 머지·배포는 하지 않는다(머지되면 자동 배포)."
     ),
 }
 
