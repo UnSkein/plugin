@@ -667,7 +667,9 @@ def scan_installed_skills() -> list[dict]:
     없다). 탐색 루트: ① plugin 동봉 dev 스킬(dao-skills/.claude/skills — 매 작업
     폴더에 심는 원본) ② 실행기에 설치된 Claude plugin 스킬(~/.claude/plugins 아래
     SKILL.md — 배달=운영자 설치 모델의 실물) ③ UNSKEIN_SKILL_SCAN_DIRS(선택).
-    프로세스 1회 실행당 1번만 스캔한다(run_loop 은 tick 마다 새 프로세스).
+    프로세스 1회 실행당 1번만 스캔한다 — run_loop 은 장수 단일 프로세스(in-process
+    tick)라 스킬 plugin 설치·제거는 watch 루프 재시작부터 신고에 반영된다
+    (unskein-setup §S5.1).
     """
     global _SKILL_SCAN_CACHE
     if _SKILL_SCAN_CACHE is not None:
