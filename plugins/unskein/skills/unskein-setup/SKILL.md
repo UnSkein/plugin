@@ -1,13 +1,13 @@
 ---
 name: unskein-setup
-description: 셋업 단일 진입점 — 토큰만 있으면 시작한다(~/.unskein/setup.env 에 토큰 값 한 줄, 호출 위치 무관). 역할을 몰라도 서버가 토큰 종류(kind)로 판별해(R0, /api/whoami · ADR-0027) EXECUTOR/PLANNER/TESTER 절차로 분기하고, 설치할 프로젝트도 멤버십 목록(whoami businesses)을 질문창으로 띄워 고르게 하며, 작업 디렉토리도 이름을 물어 셋업이 만든다. 실행기(WSL distro)를 한 프로젝트용으로 한 번에 세운다 — 서버 연결·인증(executor.env 단일 파일) + 런타임·의존성 설치 + repo 클론 + 프로비저닝 검증·보완. 자격증명(토큰·SSH 키) 갱신도 재실행으로. connect·add-site 를 통합했다. TESTER(kind=tester)도 프로비저닝한다 — 프로젝트별 tester.ps1·CDP 프로필/포트·cases 번들로 한 윈도우 호스트가 여러 프로젝트 TEST 를 격리 담당(§T). PLANNER 는 동봉 가이드로 이어 진행. 각 단계 idempotent(이미 된 건 스킵). 트리거 — 실행기 셋업, unskein-setup, 처음 시작, 온보딩, 역할 판별, 토큰 받음, whoami, 서버 연결, 클라이언트 연결, UnSkein 셋업, 모리 토큰 등록, 프로젝트 등록, 프로젝트 추가, 사이트 추가, 자격증명 갱신, 토큰 갱신, 토큰 회전, 토큰 교체, SSH 키 교체, 호스트 추가, 프로비저닝, 클론 검증, 런타임 설치, 프로젝트 격리, UNSKEIN_HOME, 다중 프로젝트, 상태 격리, TESTER 셋업, tester 프로비저닝, 화면검증기 셋업, tester.ps1, CDP 프로필, 멀티 프로젝트 TEST, 병렬 검증 격리, 테스터 토큰 발급, 멤버십 추가.
+description: 셋업 단일 진입점 — 토큰만 있으면 시작한다(~/.unskein/setup.env 에 토큰 값 한 줄, 호출 위치 무관). 역할을 몰라도 서버가 토큰 종류(kind)로 판별해(R0, /api/whoami · ADR-0027) EXECUTOR/PLANNER/TESTER 절차로 분기하고, 설치할 프로젝트도 멤버십 목록(whoami businesses)을 질문창으로 띄워 고르게 하며, 작업 디렉토리도 이름을 물어 셋업이 만든다. 실행기(WSL distro)를 한 프로젝트용으로 한 번에 세운다 — 서버 연결·인증(executor.env 단일 파일) + 런타임·의존성 설치 + repo 클론 + 프로비저닝 검증·보완. 자격증명(토큰·SSH 키) 갱신도 재실행으로. connect·add-site 를 통합했다. TESTER(kind=tester)도 프로비저닝한다 — 프로젝트별 tester.ps1·CDP 프로필/포트·cases 번들로 한 윈도우 호스트가 여러 프로젝트 TEST 를 격리 담당(§T). PLANNER 는 동봉 가이드로 이어 진행. 사용자 프로세스의 단계 스킬 plugin 설치→능력 신고 확인→정의 등록·연결→첫 카드 실증도 이 스킬이 안내한다(§S5 — frame9 개통 실측의 일반화). 각 단계 idempotent(이미 된 건 스킵). 트리거 — 실행기 셋업, unskein-setup, 처음 시작, 온보딩, 역할 판별, 토큰 받음, whoami, 서버 연결, 클라이언트 연결, UnSkein 셋업, 모리 토큰 등록, 프로젝트 등록, 프로젝트 추가, 사이트 추가, 자격증명 갱신, 토큰 갱신, 토큰 회전, 토큰 교체, SSH 키 교체, 호스트 추가, 프로비저닝, 클론 검증, 런타임 설치, 프로젝트 격리, UNSKEIN_HOME, 다중 프로젝트, 상태 격리, TESTER 셋업, tester 프로비저닝, 화면검증기 셋업, tester.ps1, CDP 프로필, 멀티 프로젝트 TEST, 병렬 검증 격리, 테스터 토큰 발급, 멤버십 추가, 단계 스킬 설치, 스킬 플러그인 설치, 프로세스 스킬 설치, 능력 신고 확인, 능력표, 프로세스 정의 등록, 프로세스 연결, 사용자 프로세스 개통, 실행기 스킬 추가.
 ---
 
 # UnSkein — 실행기·검증기 셋업 (프로젝트별)
 
 이 실행기(WSL distro)를 **한 프로젝트**를 처리할 수 있게 한 번에 세운다 — 서버 연결·인증부터 클론·의존성·검증까지. **1 watch 세션 = 1 프로젝트.** 한 distro 에서 여러 프로젝트를 돌리려면 프로젝트 디렉토리마다 상태 루트를 격리해(`UNSKEIN_HOME=<프로젝트>/.unskein` — S0, ADR-0020) 이 셋업을 반복한다: 코드(플러그인)는 전역 1벌 공유, 상태(env·creds·work)만 프로젝트별로 갈라진다. 클라이언트 주인(사용자)과 대화하며 진행한다.
 
-> **이 스킬이 셋업의 단일 진입점이다.** 역할을 모르면 **R0**(토큰 → 서버 판별)부터. 직접 프로비저닝은 두 종류 — **EXECUTOR**(kind=mori · WSL 헤드리스 · 코드개발까지 — 아래 **S0–S4**) 와 **TESTER**(kind=tester · 윈도우 네이티브 · CDP 화면검증 — **§T**). S0–S4 는 EXECUTOR 기준이고, TESTER 는 §T 에서 같은 `UNSKEIN_HOME`-식 상태 격리를 **윈도우/PowerShell·프로젝트별 번들**로 편다(한 윈도우 호스트가 여러 프로젝트 TEST 를 로그인·토큰·포트·산출물 안 섞이게 담당). **PLANNER**(kind=planner)는 동봉 가이드(`${CLAUDE_PLUGIN_ROOT}/docs/플래너설치.md`)를 이 세션이 이어서 진행한다. 역할을 이미 알면 S0/§T/플래너 문서로 직행해도 된다.
+> **이 스킬이 셋업의 단일 진입점이다.** 역할을 모르면 **R0**(토큰 → 서버 판별)부터. 직접 프로비저닝은 두 종류 — **EXECUTOR**(kind=mori · WSL 헤드리스 · 코드개발까지 — 아래 **S0–S4**, 사용자 프로세스의 단계 스킬 설치는 선택 절 **§S5**) 와 **TESTER**(kind=tester · 윈도우 네이티브 · CDP 화면검증 — **§T**). S0–S4 는 EXECUTOR 기준이고, TESTER 는 §T 에서 같은 `UNSKEIN_HOME`-식 상태 격리를 **윈도우/PowerShell·프로젝트별 번들**로 편다(한 윈도우 호스트가 여러 프로젝트 TEST 를 로그인·토큰·포트·산출물 안 섞이게 담당). **PLANNER**(kind=planner)는 동봉 가이드(`${CLAUDE_PLUGIN_ROOT}/docs/플래너설치.md`)를 이 세션이 이어서 진행한다. 역할을 이미 알면 S0/§T/플래너 문서로 직행해도 된다.
 
 - **각 단계는 idempotent** — 이미(수동으로) 된 건 감지해 **건너뛰고**, 안 된 것만 처리한다. 값이 빠지면 임의로 채우지 말고 **물어서 멈춘다**(fallback 금지).
 - 비밀(토큰·키)은 화면·셸 기록에 남기지 않는다. 저장소 주소·git 설정에 토큰을 넣지 않는다.
@@ -128,6 +128,49 @@ python3 "${CLAUDE_PLUGIN_ROOT}/bin/memory-sync.py" pull --codebase "<이 머신 
 - **역할 축**: 인자 없이 부르면 본인 메모리를 executor·operator·planner 전 역할로 받는다(같은 이름이 여러 role 에 있으면 대화형 우선 = planner 최종 승). 특정 role 만 원하면 `--role planner`.
 - **자격증명 없으면 401 로 멈춘다** — 조용히 skip 하지 않는다. 프라이버시는 소유자 스코프(서버가 본인 `user_id` 행만 반환 — 타 사용자 메모리는 절대 안 온다).
 - frontmatter 3축 규약(`project`/`role`/`scope` + `maturity` 예약)·기본값은 `bin/memory-sync.py` 헤더가 단일 출처다.
+
+## S5. 단계 스킬 플러그인 설치 — 사용자 프로세스를 이 실행기가 집게 하기 (선택·재실행)
+
+dev(기본 프로세스)만 돌리는 실행기는 이 절을 건너뛴다. **사용자 정의 프로세스**(예: frame9 폼 이관)의 AI 단계 카드를 이 실행기가 집으려면, 그 정의가 skill_key 로 지목하는 **단계 스킬이 이 distro 의 claude 에 plugin 으로 설치**돼 있어야 한다. 미설치면 실행기는 그 카드를 집지 않을 뿐이고 카드는 기다린다(pull 원칙 — 고장이 아니다). frame9_form 첫 개통(2026-07-16, EMAX/FRAMEWEB_FORM) 실측 절차의 일반화다.
+
+전체 흐름과 소유 — 스킬 규격·생산(관문 ①~③)의 단일 출처는 `unskein-skill-creator` SKILL.md:
+
+| 순서 | 무엇을 | 누가·어디서 |
+|---|---|---|
+| 1 | 단계 스킬 생산(골격·린트·매니페스트) → 스킬 plugin repo 에 push | 개발 세션 — `unskein-skill-creator`(관문 ①) |
+| 2 | 스킬 plugin 설치·업데이트 + watch 재시작 | **실행기 운영자, 이 distro — S5.1 (사람 게이트)** |
+| 3 | 능력 신고 확인(실행기 자동 신고 — 관문 ②③의 원천) | 자동(claim) + 운영자 확인 — S5.2 |
+| 4 | 프로세스 정의 등록 · 프로젝트 연결 | 사람 JWT(owner/admin) — S5.3 (실행기 밖) |
+| 5 | 첫 카드 끝-끝 실증 | 운영자 — S5.4 |
+
+### S5.1 설치 (사람 게이트 = 이 행위)
+
+〔검사: `claude plugin list` 에 그 스킬 plugin 이 원하는 버전으로 있으면 스킵〕
+
+1. **unskein plugin ≥ 1.43.0** 확인(`claude plugin list`) — 설치 스킬 스캔·능력 신고·claim 단계 소비가 든 버전. 낮으면 먼저 업데이트한다(익스큐터설치 가이드의 marketplace update 경로).
+2. **스킬 plugin 을 user 스코프로 설치·업데이트**한다 — unskein plugin 과 같은 경로(`claude plugin marketplace add <repo>` → `claude plugin install <plugin>@<marketplace>` → `claude plugin list` 로 버전 확인). 설치가 곧 "이 실행기가 그 프로세스를 집는다"는 **사람 게이트**다 — 서버에 별도 스킬 등록 절차는 없다(서버는 스킬 본문을 읽지 않는다 — 주입 경계).
+3. **watch 루프 재시작** — 돌던 watch 는 새 설치를 모른다. 그 프로젝트의 watch 세션을 재시작해야 다음 claim 부터 신고·수행에 반영된다.
+4. (선택) 표준 밖 위치의 스킬은 executor.env 에 `UNSKEIN_SKILL_SCAN_DIRS=<경로:경로>` 로 추가 스캔 루트를 준다 — 기본 스캔은 plugin 동봉 dev 6종 + `~/.claude/plugins` 아래 전부.
+
+### S5.2 신고 확인 (자동 — 운영자는 확인만 한다)
+
+실행기는 claim 마다 설치 스킬을 스캔해 **전이 계약 frontmatter(exits·output)가 있는 단계 스킬만** 폐쇄 메타(name·version·exits·output)로 자동 신고한다 — 일반 도구 스킬은 걸러져 능력표를 오염시키지 않는다(dev 동봉 6종만 이름 예외 통과). 확인:
+
+- **화면**: 프로세스 관리 화면의 능력표(팔레트)에 그 스킬·버전이 뜨는지.
+- **API**: `GET /api/businesses/{id}/capabilities` (사람 JWT).
+- claim 응답에 skills 에코가 없는 **구서버**면 실행기는 dev 카드만 처리되는 축소 상태로 조용히 돌지 않고 **중단해 드러낸다**(fallback 금지) — 서버 업데이트가 선결.
+- **신고가 안 보일 때 의심 순서**: ① 실행기 plugin 버전(신고 없음 + "마지막 사용"만 갱신되는 패턴이 시그니처) ② watch 재시작 누락(S5.1-3) ③ 스킬 frontmatter 의 exits·output 누락(관문 ① 린트로 확인).
+
+### S5.3 정의 등록·프로젝트 연결 (사람 JWT — 실행기 밖, 순서만 여기 적는다)
+
+실행기 프로비저닝 밖이지만 이게 안 되면 카드가 생성되지 않으므로 순서를 적는다. 둘 다 **사람 JWT 전용**이다(mori 토큰 불가) — 정의 등록·교체는 **owner/admin**, 프로젝트 연결은 **쓰기 권한(owner/admin/member — viewer 불가)**. 자동화 스크립트는 비밀이 대화에 남지 않게 **사용자 로컬 실행(getpass 로그인)** 방식으로 만든다.
+
+1. **정의 등록**: `POST /api/businesses/{id}/processes`(교체는 `PUT /api/processes/{key}`) — 서버가 AI 단계(claim_kinds 비어 있지 않음)마다 skill_key ↔ **신고된 계약**(exits·output)을 대조한다(불일치 422). S5.2 신고가 먼저 완료돼 있어야 첫 등록부터 교차 검증이 동작한다.
+2. **프로젝트 연결**: `PATCH /api/projects/{id}` 의 `default_process_key` — skill_key 완비 검증(누락 409). 연결 후 **새 루트 카드부터** 그 프로세스로 태어난다(기존 카드 불변).
+
+### S5.4 첫 카드 끝-끝 실증
+
+카드 1장을 올리고(카드의 **제목·설명은 실행기 프롬프트에 그대로 실린다** — 첫 단계 스킬이 읽을 입력을 설명에 적는다) 첫 AI 단계로 사람 전이(보드 드래그)한다. 실행기가 집는지(보드 선점 표시), 완료 보고로 다음 단계로 자동 전진하고 산출물이 정의된 슬롯에 쌓이는지 본다. 안 집으면 S5.2 의심 순서 → 정의 skill_key ↔ 스킬 name **정확 일치** 확인 → `unskein-doctor`.
 
 ## T. TESTER 프로비저닝 (kind=tester) — 화면검증기 (윈도우)
 
