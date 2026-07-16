@@ -29,6 +29,8 @@ REQUIRED_KEYS = ("name", "description", "version", "exits", "output")
 SLUG_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 RESULT_STATUS_RE = re.compile(r"RESULT:.*?\bstatus=(\S+)")
+RESULT_STAGE_RE = re.compile(r"RESULT:.*?\bstage=(\S+)")
+MANIFEST_FILENAME = "skills-manifest.json"
 
 
 def parse_frontmatter(text):
@@ -98,6 +100,14 @@ def lint_skill(skill_md: Path, root: Path, errors, warnings):
                 f" '<…>' 플레이스홀더만 허용 (§4-8)"
             )
 
+    if name:  # §4-12 stage 는 생산 시점에 확정되는 실행 대장 라벨 — name 과 정확 일치
+        for stage in RESULT_STAGE_RE.findall(text):
+            if stage != name:
+                errors.append(
+                    f"{rel}: RESULT 예시의 stage='{stage}' — frontmatter name"
+                    f" '{name}' 과 다르다 (§4-12)"
+                )
+
     if output == "doc" and "<<<UNSKEIN_DOC" not in text:
         errors.append(f"{rel}: output=doc 인데 <<<UNSKEIN_DOC 블록 규약이 본문에 없다 (§4-9)")
 
@@ -148,6 +158,22 @@ def main():
         if not (claude_md.parent / "SKILL.md").exists():
             warnings.append(
                 f"{claude_md.relative_to(root)}: CLAUDE.md 발견 — 배포 자산에 섞이지 않는지 확인 (§4-10)"
+            )
+
+    # §4-13 매니페스트 신선도 — repo 루트의 기존 매니페스트가 현재 추출본과 다르면 실패.
+    # --manifest 실행은 그 자체가 갱신이므로 건너뛴다. 스킬 위반이 이미 있으면 추출본이
+    # 불완전하므로 대조하지 않는다(어차피 실패).
+    manifest_file = root / MANIFEST_FILENAME
+    if not args.manifest and not errors and manifest_file.exists():
+        current = sorted(manifest, key=lambda e: e["name"])
+        try:
+            stored = json.loads(manifest_file.read_text(encoding="utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            stored = None
+        if stored != current:
+            errors.append(
+                f"{MANIFEST_FILENAME} 이 현재 추출본과 다르다(낡음) — "
+                f"--manifest {MANIFEST_FILENAME} 로 재추출해 함께 커밋한다 (§4-13)"
             )
 
     for warning in warnings:
