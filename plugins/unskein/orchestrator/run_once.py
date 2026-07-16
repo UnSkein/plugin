@@ -12,6 +12,7 @@
 stdlib 만 사용 (requests 미설치 환경). 단순 1패스 — 큐 루프/재시도 없음.
 """
 
+import glob
 import http.client
 import json
 import os
@@ -212,6 +213,10 @@ DAO_SKILLS_SRC = _env_path(
     "UNSKEIN_DAO_SKILLS",
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dao-skills"),
 )
+# 능력 신고(6단계)용 추가 스킬 탐색 루트 — ":" 구분 목록(선택). 기본 스캔(아래
+# scan_installed_skills: dev 동봉 스킬 + ~/.claude/plugins 설치 스킬)에 더해, 표준 밖
+# 경로에 설치한 스킬 plugin 을 신고에 포함시킬 때 쓴다.
+SKILL_SCAN_DIRS = os.environ.get("UNSKEIN_SKILL_SCAN_DIRS", "")
 # SSH 개인키. 기본 CRED_DIR/id_ed25519, 없으면 id_rsa 차선 탐색.
 SSH_KEY = _env_path("UNSKEIN_SSH_KEY", os.path.join(CRED_DIR, "id_ed25519"))
 # SSH known_hosts. 기본 CRED_DIR/known_hosts.
@@ -609,8 +614,85 @@ class WatchScopeError(RuntimeError):
     """
 
 
+def _skill_frontmatter(path: str) -> dict | None:
+    """SKILL.md 선두 '---' 쌍의 key: value 를 파싱해 폐쇄 메타만 뽑는다.
+
+    능력 신고는 스킬 본문이 아니라 계약 메타(name·version·exits·output)만 서버에
+    올린다(주입 경계 — 스킬 규격은 plugin unskein-skill-creator SKILL.md §2).
+    형식이 아니면 None(신고 제외 — 그 스킬은 애초에 단계 스킬 자격이 없다).
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read(16384)
+    except OSError:
+        return None
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None
+    meta: dict = {}
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        if ":" in line:
+            key, _, value = line.partition(":")
+            meta[key.strip()] = value.strip()
+    else:
+        return None  # 닫는 '---' 없음
+    name = meta.get("name")
+    if not name:
+        return None
+    # 단계 스킬만 신고한다 — 전이 계약(exits·output, 스킬 규격 §2)이 있는 것. 일반 스킬
+    # (dataviz 등 도구 스킬)은 프로세스 단계가 될 수 없으므로 능력표를 오염시키지 않는다.
+    # 예외: dev 동봉 6종은 계약 frontmatter 이전 규격이라 이름으로 통과시킨다(디폴트 단계).
+    dev_defaults = {
+        "unskein-exec", "unskein-verify", "unskein-git",
+        "unskein-wiki-search", "unskein-wiki-ingest", "unskein-wiki-lint",
+    }
+    if name not in dev_defaults and not (meta.get("exits") and meta.get("output")):
+        return None
+    out = {"name": name}
+    for key in ("version", "exits", "output"):
+        if meta.get(key):
+            out[key] = meta[key]
+    return out
+
+
+_SKILL_SCAN_CACHE: list | None = None
+
+
+def scan_installed_skills() -> list[dict]:
+    """설치 스킬 스캔 — 능력 신고(6단계)의 원천. 이름 중복은 첫 발견이 이긴다.
+
+    신고 = "이 스킬들이 실물로 설치돼 있다"(설치 실물 스캔이라 과대신고가 구조적으로
+    없다). 탐색 루트: ① plugin 동봉 dev 스킬(dao-skills/.claude/skills — 매 작업
+    폴더에 심는 원본) ② 실행기에 설치된 Claude plugin 스킬(~/.claude/plugins 아래
+    SKILL.md — 배달=운영자 설치 모델의 실물) ③ UNSKEIN_SKILL_SCAN_DIRS(선택).
+    프로세스 1회 실행당 1번만 스캔한다(run_loop 은 tick 마다 새 프로세스).
+    """
+    global _SKILL_SCAN_CACHE
+    if _SKILL_SCAN_CACHE is not None:
+        return _SKILL_SCAN_CACHE
+    roots = [os.path.join(DAO_SKILLS_SRC, ".claude", "skills")]
+    roots.append(os.path.join(os.path.expanduser("~"), ".claude", "plugins"))
+    roots += [p for p in SKILL_SCAN_DIRS.split(":") if p.strip()]
+    skills: list[dict] = []
+    seen: set[str] = set()
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        for path in sorted(
+            glob.glob(os.path.join(root, "**", "SKILL.md"), recursive=True)
+        ):
+            meta = _skill_frontmatter(path)
+            if meta and meta["name"] not in seen:
+                seen.add(meta["name"])
+                skills.append(meta)
+    _SKILL_SCAN_CACHE = skills
+    return skills
+
+
 def _claim_body() -> dict:
-    """claim 에 실어 보낼 watch 대상 필터. 미지정 항목은 넣지 않는다."""
+    """claim 에 실어 보낼 watch 대상 필터 + 능력 신고. 미지정 항목은 넣지 않는다."""
     body: dict = {}
     if WATCH_BUSINESS:
         body["business"] = WATCH_BUSINESS
@@ -620,6 +702,12 @@ def _claim_body() -> dict:
         body["task_id"] = int(WATCH_TASK)
     if AUTO_ADVANCE_TEST:
         body["auto_advance_test"] = True
+    # 능력 신고(6단계) — 설치 스킬의 폐쇄 메타. 서버가 (정의 skill_key × 이 목록 × kind)
+    # 교차로 사용자 프로세스 카드의 선점 가능 여부를 파생한다(pull 원칙 — 없는 능력의
+    # 카드는 안 집고 카드는 기다린다).
+    skills = scan_installed_skills()
+    if skills:
+        body["skills"] = skills
     return body
 
 
@@ -630,9 +718,13 @@ def claim_once() -> dict:
     - task 스코프 지정 + 응답에 watch_task_id 에코 부재: 구서버가 필터를 조용히
       무시하고 범위 밖 작업을 내줄 수 있다 — 처리하지 않고 중단한다(fallback 금지).
       (이때 서버에 남은 선점 잔재는 heartbeat 만료로 자동 회수된다 — ADR-0015.)
+    - 스킬 능력 신고 + 응답에 skills 에코 부재: 구서버가 신고를 무시한 것 — 운영자는
+      사용자 프로세스가 처리되는 줄 알지만 실제로는 dev 카드만 돈다. 침묵 축소 운행
+      대신 중단으로 드러낸다(fallback 금지 — 6단계 TEST준비 §C 6.3).
     """
+    body = _claim_body()
     try:
-        claim = _post("/api/mori/claim", _claim_body())
+        claim = _post("/api/mori/claim", body)
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             detail = exc.read().decode("utf-8", "replace")[:300]
@@ -642,6 +734,11 @@ def claim_once() -> dict:
         raise WatchScopeError(
             "서버가 watch task(서브트리) 스코프를 지원하지 않습니다 — 지정한 task 필터가 "
             "무시된 채 범위 밖 작업이 선점될 수 있어 중단합니다(서버 업데이트 필요)."
+        )
+    if body.get("skills") and "skills" not in claim:
+        raise WatchScopeError(
+            "서버가 스킬 능력 신고를 지원하지 않습니다 — 신고가 무시된 채 dev 카드만 "
+            "받게 되므로 중단합니다(서버 업데이트 필요)."
         )
     return claim
 
@@ -942,6 +1039,9 @@ def plant_dao_skills(work_root: str) -> None:
 
 # status → (이번에 수행할 단계 지시, 보고할 next status). claim 한 status 가
 # 이번 단계를 정한다 — 다오는 그 단계만 수행하고 next status 로 보고한다(단계 분할).
+# **dev 프로세스 한정**(6단계 강등) — 사용자 프로세스 카드는 이 표가 아니라 claim 응답의
+# 단계 구조 값(stage_skill·stage_doc_slot·reportable_next)으로 지시를 조립한다
+# (build_prompt — 지시 "문장"은 이 템플릿이, "값"은 정의가 소유한다).
 STAGE_INSTRUCTIONS = {
     # plan = 첫 구현 단계(스콥 게이트 — ADR-0009). 사람이 attach_plan 으로 수용 기준을
     # 확정해 실행대기로 올린 작업이라, 다오는 스콥을 다시 하지 않고 곧장 구현한다.
@@ -986,16 +1086,59 @@ def build_prompt(task: dict) -> str:
     if description:
         header += f"{description}\n"
 
-    # 이번 단계 지시 — claim 한 status 가 단계를 정한다(매핑 없으면 unknown 단계로 드러냄).
-    stage_line = STAGE_INSTRUCTIONS.get(
-        status,
-        f"이번 단계 매핑이 없습니다(status={status}). "
-        "QUESTION 으로 어떤 단계인지 물어라.",
-    )
+    # 이번 단계 지시 — claim 한 status 가 단계를 정한다. 사용자 프로세스 카드(6단계)는
+    # claim 이 배달한 단계 구조 값(stage_skill 등)으로 조립하고, dev 카드는 하드코딩 표
+    # (STAGE_INSTRUCTIONS — dev 한정 강등분)를 쓴다. 둘 다 없으면 QUESTION 으로 드러낸다.
+    process_key = task.get("process_key") or "dev"
+    stage_skill = task.get("stage_skill")
+    if process_key != "dev" and stage_skill:
+        stage_label = task.get("stage_label") or status
+        doc_slot = task.get("stage_doc_slot")
+        nexts = task.get("reportable_next") or []
+        if doc_slot in ("plan_doc", "result_doc", "close_doc"):
+            out_line = (
+                "산출물: 이 단계의 산출 본문을 RESULT 의 <<<UNSKEIN_DOC 블록으로 "
+                f"보고하라(서버가 {doc_slot} 에 저장한다)."
+            )
+        elif doc_slot == "payload":
+            out_line = (
+                "산출물: 구조화 결과를 RESULT 의 <<<UNSKEIN_DOC 블록으로 보고하라"
+                "(서버가 이 단계 키의 payload 슬롯에 저장한다)."
+            )
+        else:
+            out_line = "산출물: 없음 — RESULT 첫 줄만 보고한다."
+        stage_line = (
+            f"이번 단계: {stage_label}(status={status}) — 설치된 스킬 "
+            f"'{stage_skill}' 을 호출해 이 단계를 수행하라. 스킬은 이름 정확 일치로만 "
+            "선택한다(비슷한 스킬로 대체·추론 금지 — 그 스킬이 설치돼 있지 않으면 "
+            "수행하지 말고 QUESTION 으로 미설치를 드러내라).\n"
+            + out_line
+            + (
+                "\n보고 status 는 다음 중 판정에 맞는 하나만 쓴다: "
+                + ", ".join(nexts) + "."
+                if nexts
+                else ""
+            )
+        )
+    else:
+        stage_line = STAGE_INSTRUCTIONS.get(
+            status,
+            f"이번 단계 매핑이 없습니다(status={status}"
+            + (f", process={process_key}" if process_key != "dev" else "")
+            + "). QUESTION 으로 어떤 단계인지 물어라.",
+        )
 
     # 이전 단계 저장본을 프롬프트에 주입(있을 때만 — 빈값 강제 금지).
     prior = ""
-    if status in ("plan", "exec"):
+    if process_key != "dev" and stage_skill:
+        # 사용자 프로세스(6단계) — 슬롯 의미는 정의 소유라 종류 무관하게 있는 것만 싣는다.
+        user_plan_doc = task.get("plan_doc")
+        if user_plan_doc:
+            prior += f"\n구현 사양·이전 단계 산출물(plan_doc):\n{user_plan_doc}\n"
+        user_result_doc = task.get("result_doc")
+        if user_result_doc:
+            prior += f"\n이전 검증 결과(result_doc):\n{user_result_doc}\n"
+    elif status in ("plan", "exec"):
         # plan = 첫 구현 단계(스콥 게이트 — ADR-0009). plan_doc 은 직전 단계 산출물이
         # 아니라 사람이 attach_plan 으로 붙인 구현 사양(수용 기준)이다. exec 는 레거시.
         plan_doc = task.get("plan_doc")
