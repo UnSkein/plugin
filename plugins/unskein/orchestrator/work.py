@@ -318,9 +318,19 @@ def cmd_prepare(argv: list[str]) -> int:
 
     # --- 셋업 (run_once._process_task 전반부와 동일한 게이트·순서) ---
     repo = task.get("repo_url") or ""
-    if not repo:
-        return _bail(task_id, "repo_url 이 비어 있습니다(프로젝트에 repo 주소 미등록)")
-    if ro.detect_scheme(repo) == "unknown":
+    process_key = task.get("process_key") or "dev"
+    # 무repo 프로젝트(코드베이스 비보유 — 사이트 API 작업형)의 사용자 프로세스 카드는
+    # 클론 없이 작업 폴더만으로 수행한다. dev(코드 개발) 카드는 repo 필수(run_once 동일).
+    no_repo = not repo
+    if no_repo and process_key == "dev":
+        return _bail(
+            task_id,
+            "repo 주소가 비어 있습니다(프로젝트에 repo 미등록) — 코드 개발(dev) "
+            "카드는 repo 가 필요합니다. 코드베이스가 없는 프로젝트면 사용자 프로세스를 "
+            "연결한 뒤 새 카드로 진행하세요(연결은 새 루트 카드부터 적용 — 이 카드는 "
+            "dev 로 남아 같은 오류를 반복합니다).",
+        )
+    if not no_repo and ro.detect_scheme(repo) == "unknown":
         return _bail(task_id, f"repo_url 형식을 알 수 없습니다(https:// 또는 git@ 만 지원): {repo}")
 
     task_root = _task_root(task_id)
@@ -330,15 +340,16 @@ def cmd_prepare(argv: list[str]) -> int:
     except Exception as e:  # noqa: BLE001
         return _bail(task_id, str(e))
     try:
-        git_env = ro.build_git_env(repo)
+        git_env = ro.build_dao_env() if no_repo else ro.build_git_env(repo)
     except Exception as e:  # noqa: BLE001
         return _bail(task_id, str(e))
-    try:
-        ro.prepare_repo(
-            repo, ro._repo_name(repo), task.get("status") or "", git_env, work_root=task_root
-        )
-    except Exception as e:  # noqa: BLE001
-        return _bail(task_id, f"repo 준비 실패: {e}")
+    if not no_repo:
+        try:
+            ro.prepare_repo(
+                repo, ro._repo_name(repo), task.get("status") or "", git_env, work_root=task_root
+            )
+        except Exception as e:  # noqa: BLE001
+            return _bail(task_id, f"repo 준비 실패: {e}")
 
     # --- 프롬프트 결정 (answered/plan 게이트는 run_once 와 동일) ---
     status = task.get("status") or ""
@@ -356,7 +367,7 @@ def cmd_prepare(argv: list[str]) -> int:
             )
         prompt = ro.build_prompt(task)
 
-    work_dir = os.path.join(task_root, ro._repo_name(repo))
+    work_dir = task_root if no_repo else os.path.join(task_root, ro._repo_name(repo))
     meta = {"task_id": task_id, "status": status, "work_dir": work_dir, "task_root": task_root}
     with open(_meta_path(task_id), "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False)
@@ -386,8 +397,11 @@ def cmd_prepare(argv: list[str]) -> int:
             "powershell.exe/윈도우 Node 로 호출). PASS → RESULT: status=inspect, "
             "FAIL → RESULT: status=plan. 검증 결과 구조는 report --payload-file 로 싣는다."
         )
+    # 다오 스킬 위치는 task_root 바로 안이다 — repo 카드는 WORK_DIR 가 그 아래 클론
+    # 폴더라 ../, 무repo 카드는 WORK_DIR==task_root 라 ./ 가 맞다.
+    rel = "." if no_repo else ".."
     print(
-        f"\n다음: WORK_DIR 로 들어가 이식된 다오 스킬(../CLAUDE.md + ../.claude/skills/)을 "
+        f"\n다음: WORK_DIR 로 들어가 이식된 다오 스킬({rel}/CLAUDE.md + {rel}/.claude/skills/)을 "
         f"따라 위 프롬프트를 수행한 뒤, 최종 RESULT:/QUESTION: 마커를 파일로 저장하고 "
         f"`work.py report {task_id} --marker-file <파일>` 로 회수하라."
     )
