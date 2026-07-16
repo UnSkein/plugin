@@ -4,8 +4,9 @@
 흐름:
   1) POST /api/mori/claim (X-Mori-Token) 으로 backlog/answered 작업 1건 선점.
   2) 작업 → 프롬프트 변환.
-  3) repo_url 경로에서 `claude -p "<prompt>" --output-format json
-     --dangerously-skip-permissions` 비대화형 실행.
+  3) 작업 폴더에서 `claude -p "<prompt>" --output-format json
+     --dangerously-skip-permissions` 비대화형 실행 — repo 있는 프로젝트는 클론을
+     준비하고, 무repo 프로젝트(코드베이스 비보유)는 빈 작업 폴더로 돈다.
   4) stdout(json) 파싱: session_id + result 텍스트에서 RESULT:/QUESTION: 추출.
   5) RESULT → report, QUESTION → question 으로 UnSkein 에 회수.
 
@@ -448,6 +449,19 @@ def prepare_ssh_creds() -> None:
             print(f"[warn] ssh-keyscan 실행 실패(무시): {exc}")
 
 
+def build_dao_env() -> dict:
+    """다오 자식 프로세스의 공통 env — 부모를 보존하고 표적 비밀만 줄인다.
+
+    repo 없는 작업(무repo 프로젝트 — 코드베이스 비보유, 사이트 API 작업형)의
+    다오도 이 env 로 돈다 — git 자격증명 없이도 비밀 축소 규칙은 동일하게 적용.
+    """
+    env = os.environ.copy()  # PATH/HOME/ANTHROPIC 인증 보존 (빈 dict 금지)
+    env.pop("UNSKEIN_MORI_TOKEN", None)  # 표적 비밀 축소: 자식 다오는 모리 API 토큰 불필요
+    env.pop("UNSKEIN_SUDO_PASSWORD", None)  # 프로비저닝 전용 — 자식 다오는 sudo 불필요(단일 .env 담아도 안 샘)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    return env
+
+
 def build_git_env(repo_url: str) -> dict:
     """repo 의 전송 방식에 맞춰 git 자격증명을 환경변수로 구성한다.
 
@@ -455,10 +469,7 @@ def build_git_env(repo_url: str) -> dict:
     토큰을 repo_url/clone 인자/.git config 에 절대 넣지 않는다 — ASKPASS+env 경로로만.
     키/토큰 누락은 raise 로 드러낸다 (fallback 기본값 금지).
     """
-    env = os.environ.copy()  # PATH/HOME/ANTHROPIC 인증 보존 (빈 dict 금지)
-    env.pop("UNSKEIN_MORI_TOKEN", None)  # 표적 비밀 축소: 자식 다오는 모리 API 토큰 불필요
-    env.pop("UNSKEIN_SUDO_PASSWORD", None)  # 프로비저닝 전용 — 자식 다오는 sudo 불필요(단일 .env 담아도 안 샘)
-    env["GIT_TERMINAL_PROMPT"] = "0"
+    env = build_dao_env()
 
     scheme = detect_scheme(repo_url)
 
@@ -1186,17 +1197,29 @@ def build_prompt(task: dict) -> str:
                 sb.extend(f"      {pl}" for pl in pdoc.splitlines())
         subtree_block = "\n".join(sb) + "\n"
 
+    # 작업 공간 안내 — repo 있는 프로젝트는 클론 폴더, 무repo 프로젝트(코드베이스 비보유 —
+    # 사이트 API 작업형)는 빈 작업 폴더가 공간이다. git 동작 지시는 repo 있을 때만 낸다.
+    if repo:
+        workspace = (
+            f"대상 repo: {repo}\n"
+            + f"작업 폴더 이름: {folder}\n\n"
+            + f"모리가 '{folder}' 를 미리 클론·최신화해 두었다"
+            + (
+                " (기본 브랜치 최신 상태에서 시작 — 직접 clone/pull/checkout 하지 말 것)."
+                if status == "plan"
+                else " (이전 단계 작업 트리 유지 — 직접 clone/pull/reset 하지 말 것)."
+            )
+            + f" '{folder}' 안으로 들어가 작업을 수행하라.\n"
+        )
+    else:
+        workspace = (
+            "이 프로젝트는 코드베이스(repo)가 없다 — 작업 대상은 카드 본문과 단계 "
+            "스킬이 지시하는 실체(사이트 API 등)다. 현재 폴더는 이 작업 전용 폴더이니 "
+            "중간 산출 파일이 필요하면 여기에 만들고, git clone·pull·PR 은 하지 않는다.\n"
+        )
     return (
         header
-        + f"대상 repo: {repo}\n"
-        + f"작업 폴더 이름: {folder}\n\n"
-        + f"모리가 '{folder}' 를 미리 클론·최신화해 두었다"
-        + (
-            " (기본 브랜치 최신 상태에서 시작 — 직접 clone/pull/checkout 하지 말 것)."
-            if status == "plan"
-            else " (이전 단계 작업 트리 유지 — 직접 clone/pull/reset 하지 말 것)."
-        )
-        + f" '{folder}' 안으로 들어가 작업을 수행하라.\n"
+        + workspace
         + stage_line
         + "\n"
         + prior
@@ -1374,7 +1397,12 @@ def _default_branch(repo_path: str, git_env: dict) -> str:
         )
         if chk.returncode == 0:
             return cand
-    raise RuntimeError("origin 기본 브랜치를 찾을 수 없습니다 (origin/HEAD·main·master 모두 없음)")
+    raise RuntimeError(
+        "origin 기본 브랜치를 찾을 수 없습니다 (origin/HEAD·main·master 모두 없음) — "
+        "repo 가 빈 저장소(커밋 0)면 초기 커밋을 푸시하고, 코드베이스가 필요 없는 "
+        "프로젝트면 화면의 프로젝트 수정에서 repo 주소를 비우세요"
+        "(사용자 프로세스 카드는 repo 없이 수행됩니다)"
+    )
 
 
 def prepare_repo(
@@ -1463,19 +1491,29 @@ def _process_task(task: dict) -> int:
     """
     task_id = task["id"]
     repo = task.get("repo_url") or ""
+    process_key = task.get("process_key") or "dev"
 
-    # repo 주소 게이트 — 빈값/형식미상은 QUESTION 으로 회수.
-    if not repo:
-        msg = "repo_url 이 비어 있습니다(프로젝트에 repo 주소 미등록)"
+    # repo 주소 게이트 — 작업 = repo 작업이라는 전제는 dev(코드 개발) 프로세스의 것이다.
+    # 사용자 프로세스에는 코드베이스 없이 사이트 API 를 다루는 프로젝트가 있다 — 그런
+    # 프로젝트(repo_url 미등록)의 카드는 클론 없이 작업 폴더만 만들어 단계 스킬을 수행한다.
+    no_repo = not repo
+    if no_repo and process_key == "dev":
+        msg = (
+            "repo 주소가 비어 있습니다(프로젝트에 repo 미등록) — 코드 개발(dev) "
+            "카드는 repo 가 필요합니다. 코드베이스가 없는 프로젝트면 사용자 프로세스를 "
+            "연결한 뒤 새 카드로 진행하세요(연결은 새 루트 카드부터 적용 — 이 카드는 "
+            "dev 로 남아 같은 오류를 반복합니다)."
+        )
         print(f"[error] {msg}")
         _post(f"/api/mori/tasks/{task_id}/question", {"question": msg})
         return 1
-    scheme = detect_scheme(repo)
-    if scheme == "unknown":
-        msg = f"repo_url 형식을 알 수 없습니다(https:// 또는 git@ 만 지원): {repo}"
-        print(f"[error] {msg}")
-        _post(f"/api/mori/tasks/{task_id}/question", {"question": msg})
-        return 1
+    if not no_repo:
+        scheme = detect_scheme(repo)
+        if scheme == "unknown":
+            msg = f"repo_url 형식을 알 수 없습니다(https:// 또는 git@ 만 지원): {repo}"
+            print(f"[error] {msg}")
+            _post(f"/api/mori/tasks/{task_id}/question", {"question": msg})
+            return 1
 
     # 작업 폴더 보장 — 동시 실행 격리를 위해 작업별 폴더(WORK_ROOT/<task_id>)를 쓴다.
     # 같은 task 의 여러 단계(plan→exec→test→inspect)는 같은 폴더라 작업트리가 이어지고,
@@ -1494,8 +1532,9 @@ def _process_task(task: dict) -> int:
         return 1
 
     # git 자격증명 환경 구성 — 키/토큰 누락은 QUESTION 으로 드러낸다(fallback 금지).
+    # 무repo 작업은 git 자격증명이 필요 없다 — 비밀 축소만 같은 규칙으로 적용한 env.
     try:
-        git_env = build_git_env(repo)
+        git_env = build_dao_env() if no_repo else build_git_env(repo)
     except Exception as e:  # noqa: BLE001 — 누락 사유를 사용자에게 그대로 회수
         msg = str(e)
         print(f"[error] {msg}")
@@ -1504,15 +1543,17 @@ def _process_task(task: dict) -> int:
 
     # repo 준비 — 모리가 결정적으로 clone/fetch/(plan 이면)기본 브랜치 리셋한다.
     # 이전 작업의 잔여 브랜치 위에서 작업하거나 stale base 로 시작하는 것을 막는다.
-    try:
-        prepare_repo(
-            repo, _repo_name(repo), task.get("status") or "", git_env, work_root=task_root
-        )
-    except Exception as e:  # noqa: BLE001 — 준비 실패 사유를 그대로 회수
-        msg = f"repo 준비 실패: {e}"
-        print(f"[error] {msg}")
-        _post(f"/api/mori/tasks/{task_id}/question", {"question": msg})
-        return 1
+    # 무repo 작업은 준비할 repo 가 없다 — 작업 폴더(task_root)만으로 다오를 띄운다.
+    if not no_repo:
+        try:
+            prepare_repo(
+                repo, _repo_name(repo), task.get("status") or "", git_env, work_root=task_root
+            )
+        except Exception as e:  # noqa: BLE001 — 준비 실패 사유를 그대로 회수
+            msg = f"repo 준비 실패: {e}"
+            print(f"[error] {msg}")
+            _post(f"/api/mori/tasks/{task_id}/question", {"question": msg})
+            return 1
 
     # 2) 프롬프트 / 이어받기 결정 — answered 면 직전 다오 세션을 사람 답변으로 이어받는다.
     claim_status = task.get("status") or ""
