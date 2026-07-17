@@ -30,6 +30,12 @@ $env:UNSKEIN_MORI_TOKEN = ""
 $env:UNSKEIN_WATCH_BUSINESS = "MUPAISTUDIO"
 $env:UNSKEIN_WATCH_PROJECT  = "UNSKEIN_SAAS"
 
+# ── 케이스 동기용 비즈니스 id ──
+# 이름이 아니라 **id**(숫자)다 — 이름→id 해석은 planner 토큰 전용이라 tester 는 id 를 직접 둔다.
+# 얻는 법: 웹에서 그 비즈니스를 연 주소의 id, 또는 플래너에게 확인. 미설정이면 케이스 pull/push 가
+# 명확히 멈춘다(검증 자체는 진행 — 리포트에 "케이스 동기 미실행" 명시. unskein-test §0.2).
+$env:UNSKEIN_BUSINESS_ID = ""
+
 # ── CDP 포트↔프로필 페어링 (병렬 격리 = 경로 2 필수) ──
 # 인증(쿠키·localStorage·JWT) 경계는 **프로필**이다(unskein-test §3). config 마다 다른 포트+다른 프로필을 1:1 로.
 #   기동:  start.ps1 -Port $env:CDP_PORT -Profile $env:CDP_PROFILE
@@ -37,6 +43,24 @@ $env:UNSKEIN_WATCH_PROJECT  = "UNSKEIN_SAAS"
 # CDP_PORT 는 remote.js 가 읽는다(명령마다 --port 생략 가능). CDP_PROFILE 은 start.ps1 -Profile 인자로 넘기는 번들 관례.
 $env:CDP_PORT    = "9222"                        # config 마다 9222, 9223, … 유일하게(공유 금지)
 $env:CDP_PROFILE = "MUPAISTUDIO__UNSKEIN_SAAS"   # 보통 <business>__<project>
+
+# ── 이 번들이 담당할 단계 스킬이 요구하는 값 ──
+# 큐 왕복(위 값들)만으로는 카드를 받을 뿐이고, **검증을 수행하는 것은 단계 스킬**이다. 그 스킬이
+# 자기 `입력` 절에 요구 환경값을 선언한다 — 여기 채우는 값의 단일 출처는 **그 스킬 문서**다
+# (unskein-setup §T3). 빠지면 스킬이 절차 1에서 진행하지 않고 QUESTION 을 낸다(조용한 우회 없음).
+# 담당 단계 스킬이 바뀌면 이 구획도 그 스킬의 `입력` 절을 다시 읽어 맞춘다.
+#
+# 아래는 frame9_bnd 검수(frame9bnd-step06-verify-cdp) 담당 번들의 실물 예다. 다른 프로세스를
+# 담당하면 그 단계 스킬이 요구하는 값으로 갈아 끼운다(이 세 줄이 모든 테스터의 필수는 아니다).
+
+# FrameWeb 접점 — migration9 API + 프리뷰 화면이 이 도메인에 있다(실측 2026-07-17).
+#   ⚠️ dev.mupai.studio 아님 — 거긴 PAT 발급용 별개 플랫폼이라 migration9 API 가 없다.
+#$env:FRAME9_API_BASE  = "https://frameweb.mupai.studio"
+# 백엔드 조회 인증 — `X-FrameWeb-Token` 헤더 값. 없거나 401 이면 우회하지 말고 QUESTION.
+#$env:FRAME9_API_TOKEN = ""
+# 이관 작업공간 키 — frmcmp-tree 조회 필터이자, 프리뷰의 활성 비즈니스와 대조하는 값.
+#   ⚠️ CDP 프로필에 developer 등급 로그인 + 활성 비즈니스가 이 값으로 맞춰져 있어야 프리뷰가 열린다.
+#$env:FRAME9_BIS_ID    = ""
 
 # (선택) 이 config 전용 산출물 폴더 — report 의 payload 엔 경로만 싣는다(파일은 여기/저장소에).
 #   번들 관례일 뿐 스크립트가 읽는 변수는 아니다(report --doc/--payload 에 경로로 직접 지정).
