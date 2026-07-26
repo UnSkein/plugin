@@ -29,6 +29,7 @@
 | `test` | 검증 (`unskein-verify`) | — | `result_doc` (검증 결과) + `docs/raw/` 기록 | `inspect` |
 | `inspect` | 마감 (`unskein-git`) | 앞: `unskein-wiki-ingest` + `unskein-wiki-lint` | `close_doc` (변경 요약·PR 링크) | `done` |
 
+- **카드가 스킬을 지목했으면 그 스킬이 주 스킬 자리를 대신한다(ADR-0032)**: 프롬프트가 "이 단계의 주 스킬은 카드가 지정한 '<이름>' 이다" 라고 지시하면, 위 표의 **수행 단계 주 스킬 자리**에 그 스킬을 쓴다(이름 정확 일치 — 비슷한 스킬로 대체·추론 금지, 설치돼 있지 않으면 수행하지 말고 `QUESTION` 으로 미설치를 드러낸다). 보조 단계·산출 본문·보고 next status 는 표 그대로다. 지목은 구현 단계에만 온다 — `test`·`inspect` 는 언제나 표의 기본 스킬이다.
 - **스콥 게이트(ADR-0009)**: 스콥(수용 기준)은 사람이 실행 전 확정해 `plan_doc` 으로 붙이고(모리 서버 게이트) 실행대기(`plan`)로 올린다. 그래서 `plan` 을 claim 하면 다오는 스콥을 다시 하지 않고 **곧장 구현**한다. (`exec` status 는 은퇴 — 이미 exec 로 들어간 작업만 드레인되고, 새 작업은 `plan` 에서 구현 후 곧장 `test` 로 보고한다.)
 - 보조 단계는 그 단계 안에서 함께 수행하되 **자체 status 전이를 만들지 않는다.** `wiki-search`는 `plan` 안에서, `wiki-ingest`·`wiki-lint`는 `inspect` 안에서 수행한다.
 - `wiki-ingest`·`wiki-lint`의 산출물은 repo 커밋(`docs/architecture`·`docs/decisions`)으로만 남긴다. DB 본문 컬럼에는 저장하지 않는다.
