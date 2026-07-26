@@ -721,6 +721,11 @@ def _claim_body() -> dict:
     skills = scan_installed_skills()
     if skills:
         body["skills"] = skills
+    # 기능 신고(ADR-0032) — "카드 지목(stage_skill_override)을 프롬프트에 반영할 수 있다".
+    # 스킬 신고가 "무엇을 설치했나"라면 이쪽은 "무엇을 이해하나"다. 이 신고가 없는 실행기에는
+    # 서버가 지목 카드를 주지 않는다 — 지목을 무시한 채 기본 스킬로 끝내버리는 조용한 무시를
+    # 막기 위해서다(구버전은 이 키를 안 보내므로 자동으로 그 취급을 받는다).
+    body["features"] = ["card_skill"]
     return body
 
 
@@ -1060,18 +1065,18 @@ STAGE_INSTRUCTIONS = {
     # 확정해 실행대기로 올린 작업이라, 다오는 스콥을 다시 하지 않고 곧장 구현한다.
     "plan": (
         "이번 단계: 구현+자체검증. 먼저 unskein-wiki-search 로 기존 지식을 확인하고, "
-        "unskein-exec 로 주입된 구현 사양(수용 기준)을 최소·수술적으로 구현한 뒤, "
+        "{main} 로 주입된 구현 사양(수용 기준)을 최소·수술적으로 구현한 뒤, "
         "unskein-verify 로 타입체크·빌드·테스트로 자체검증하라(화면검증은 별도 TESTER 담당). "
         "이 단계에서는 커밋·push 하지 않는다(마감 단계에서만)."
     ),
     # exec 는 은퇴된 레거시 단계 — 이미 exec 로 들어간 작업의 드레인용으로만 남긴다
     # (새 작업은 plan 에서 구현 후 곧장 test 로 보고한다 — dao-skills/CLAUDE.md 단계 표).
     "exec": (
-        "이번 단계: 구현. unskein-exec 로 정해진 범위를 최소·수술적으로 구현하라. "
+        "이번 단계: 구현. {main} 로 정해진 범위를 최소·수술적으로 구현하라. "
         "이 단계에서는 커밋·push 하지 않는다(마감 단계에서만)."
     ),
     "test": (
-        "이번 단계: 검증. unskein-verify 로 타입체크·빌드·테스트를 돌리고 결과를 확인하라. "
+        "이번 단계: 검증. {main} 로 타입체크·빌드·테스트를 돌리고 결과를 확인하라. "
         "검증 결과 본문을 RESULT 마커의 <<<UNSKEIN_DOC 블록으로 보고하라."
     ),
     "inspect": (
@@ -1079,9 +1084,21 @@ STAGE_INSTRUCTIONS = {
         "커밋 diff·close_doc·이전 단계 기록)을 읽고, 다음 작업이 재사용할 지식(패턴·결정·함정)이 "
         "있는지 스스로 판단하라. 있으면 unskein-wiki-ingest 로 그 지식을 기록하고, 없으면 억지로 "
         "만들지 말고 RESULT 에 '기록할 지식 없음: <이유>' 한 줄만 남겨라. 그다음 unskein-wiki-lint "
-        "로 문서 부패를 점검한 뒤, unskein-git 으로 feature 브랜치에 커밋·push 하고 PR 을 만들어라. "
+        "로 문서 부패를 점검한 뒤, {main} 으로 feature 브랜치에 커밋·push 하고 PR 을 만들어라. "
         "master 직접 머지·배포는 하지 않는다(머지되면 자동 배포)."
     ),
+}
+
+# dev 단계의 **주 스킬** — 위 표의 {main} 자리에 채워지는 기본값. 카드가 스킬을 지목하면
+# (템플릿형 — task.skill_key, ADR-0032) 그 자리를 지목 스킬이 **대신 차지한다**. 문장을 덧붙여
+# 두 스킬을 함께 보여주지 않는 이유: 같은 역할의 스킬이 둘 보이면 다오가 추론으로 고르게 되고,
+# 그건 6단계가 명시로 금지한 것이다(선택 결정성 — 정확 일치 하나). 보조 스킬(wiki-search·
+# verify·wiki-lint)은 역할이 달라 그대로 남는다.
+DEV_STAGE_MAIN_SKILL = {
+    "plan": "unskein-exec",
+    "exec": "unskein-exec",
+    "test": "unskein-verify",
+    "inspect": "unskein-git",
 }
 
 
@@ -1104,6 +1121,11 @@ def build_prompt(task: dict) -> str:
     # (STAGE_INSTRUCTIONS — dev 한정 강등분)를 쓴다. 둘 다 없으면 QUESTION 으로 드러낸다.
     process_key = task.get("process_key") or "dev"
     stage_skill = task.get("stage_skill")
+    # 카드 지목(템플릿형 — 표준 dev 프로세스 위에서 스킬을 카드의 도구로 쓰는 방식): 서버가
+    # task.skill_key 오버라이드를 stage_skill 로 배달하면서 출처를 이 깃발로 알린다. dev 카드는
+    # 정의 파생 stage_skill(=기본 스킬)을 무시하고 하드코딩 표를 쓰므로, 카드가 명시로 지목한
+    # 경우에만 그 예외를 뚫는다 — 깃발 없이 조건을 열면 모든 dev 카드의 프롬프트가 바뀐다.
+    skill_override = bool(task.get("stage_skill_override")) and bool(stage_skill)
     if process_key != "dev" and stage_skill:
         stage_label = task.get("stage_label") or status
         doc_slot = task.get("stage_doc_slot")
@@ -1134,12 +1156,27 @@ def build_prompt(task: dict) -> str:
             )
         )
     else:
-        stage_line = STAGE_INSTRUCTIONS.get(
-            status,
-            f"이번 단계 매핑이 없습니다(status={status}"
-            + (f", process={process_key}" if process_key != "dev" else "")
-            + "). QUESTION 으로 어떤 단계인지 물어라.",
-        )
+        # dev 단계표 — 주 스킬 자리({main})는 카드 지목이 있으면 그 스킬이, 없으면 기본 스킬이
+        # 채운다(템플릿형 — ADR-0032). 지목 스킬을 문장으로 덧붙이지 않고 **자리를 대체**해,
+        # 같은 역할의 스킬이 둘 보이는 상황(추론 선택)을 만들지 않는다.
+        main_skill = stage_skill if skill_override else DEV_STAGE_MAIN_SKILL.get(status)
+        template = STAGE_INSTRUCTIONS.get(status)
+        if template is None:
+            stage_line = (
+                f"이번 단계 매핑이 없습니다(status={status}"
+                + (f", process={process_key}" if process_key != "dev" else "")
+                + "). QUESTION 으로 어떤 단계인지 물어라."
+            )
+        else:
+            stage_line = template.format(main=main_skill)
+            if skill_override:
+                # dev 단계 규약(보고 status·산출물 슬롯·커밋 시점)은 그대로 두고 주 스킬만
+                # 바꿨음을 못박는다 — 미설치면 대체하지 말고 QUESTION 으로 드러내야 한다.
+                stage_line += (
+                    f"\n이 단계의 주 스킬은 카드가 지정한 '{stage_skill}' 이다 — 이름 정확 일치로만 "
+                    "호출한다(비슷한 스킬로 대체·추론 금지 — 설치돼 있지 않으면 수행하지 말고 "
+                    "QUESTION 으로 미설치를 드러내라)."
+                )
 
     # 이전 단계 저장본을 프롬프트에 주입(있을 때만 — 빈값 강제 금지).
     prior = ""
