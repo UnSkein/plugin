@@ -13,7 +13,7 @@
  * 사용:
  *   node remote.js tabs
  *   node remote.js navigate <url> [--tab=<sel>] [--new]
- *   node remote.js shot <name> [--tab=<sel>] [--full]
+ *   node remote.js shot <name> [--tab=<sel>] [--full] [--png]
  *   node remote.js viewport [<w>x<h>] [--tab=<sel>]       # 화면 크기 고정/확인 (기준 1920x1080)
  *   node remote.js click <selector> [--tab=<sel>]
  *   node remote.js type <selector> <text> [--tab=<sel>]   # React 호환 native setter 사용
@@ -33,7 +33,11 @@
  *   5000  : 일반 페이지 (기본값)
  *   10000 : 자동 갱신/비동기 요청 많은 화면
  *
- * shot 저장 위치: scripts/shots/<name>.png (디렉토리 자동 생성)
+ * shot 저장 위치: scripts/shots/<name>.jpg (디렉토리 자동 생성)
+ *   기본 JPEG 품질 80 — 증거는 서버 디스크에 회차마다 쌓이고 용량이 곧 비용이라,
+ *   회차 롤링(오래된 회차 삭제)과 같은 목적으로 한 장의 무게를 줄인다.
+ *   해상도는 줄이지 않는다 — 1920 기준으로 판정하므로 축소하면 증거 가치가 깨진다.
+ *   --png 또는 이름을 .png 로 주면 무손실 PNG (텍스트 판독이 쟁점인 캡처용).
  */
 
 const { chromium } = require('playwright');
@@ -42,6 +46,16 @@ const path = require('path');
 
 const SHOT_DIR = path.join(__dirname, 'shots');
 if (!fs.existsSync(SHOT_DIR)) fs.mkdirSync(SHOT_DIR, { recursive: true });
+
+// 캡처 기본 품질 — 증거 용량 정책(2026-07-31). WebP 가 더 작지만 Playwright 가 못 찍고
+// 서버 변환은 새 의존성을 부르므로 JPEG 로 간다.
+const SHOT_JPEG_QUALITY = 80;
+
+function fmtBytes(n) {
+    if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(2)}MB`;
+    if (n >= 1024) return `${(n / 1024).toFixed(1)}KB`;
+    return `${n}B`;
+}
 
 const argv = process.argv.slice(2);
 const cmd = argv[0];
@@ -125,14 +139,39 @@ const COMMANDS = {
         console.log(`     title: ${await page.title()}`);
     },
 
+    // 기본 JPEG 품질 80. PNG 는 명시할 때만(--png 또는 이름이 .png) — 텍스트 판독이
+    // 쟁점인 캡처는 압축 잡티가 판정을 흐리므로 무손실이 필요하다.
+    // 해상도는 건드리지 않는다: 판정 기준선이 1920 뷰포트(SKILL.md §0.6)라 축소하면
+    // "잘려서 안 보인다"와 "원래 없다"를 다시 못 가른다.
     async shot(context) {
         const [, name] = positional();
-        if (!name) { console.error('Usage: shot <name> [--full]'); process.exit(1); }
+        if (!name) { console.error('Usage: shot <name> [--full] [--png]'); process.exit(1); }
         const page = pickPage(context, getOpt('tab'));
         if (!page) { console.error('[ERR] 탭 없음'); process.exit(1); }
-        const file = path.join(SHOT_DIR, `${name}.png`);
-        await page.screenshot({ path: file, fullPage: hasFlag('full') });
-        console.log(`[OK] ${file}`);
+
+        const givenExt = path.extname(name).toLowerCase();
+        // .jpeg 는 서버 증거 허용 목록(.png/.jpg/.webp/.json/.txt/.md/.log)에 없다.
+        // 찍어두면 업로드 단계에서 빠져 증거가 단말에만 남으므로 만드는 자리에서 막는다.
+        if (givenExt === '.jpeg') {
+            console.error('[ERR] .jpeg 로는 찍지 않습니다 — 서버 증거 허용 확장자는 .jpg 입니다. 이름을 .jpg 로 주세요.');
+            process.exit(2);
+        }
+        const png = hasFlag('png') || givenExt === '.png';
+        // 이름에 확장자를 줬으면 중복해 붙이지 않는다(NFL100.png → NFL100.png).
+        const base = (givenExt === '.png' || givenExt === '.jpg') ? name.slice(0, -givenExt.length) : name;
+        const file = path.join(SHOT_DIR, `${base}${png ? '.png' : '.jpg'}`);
+
+        // quality 는 jpeg 전용 옵션이라 png 에 함께 주면 Playwright 가 거부한다 — 분기해서 넘긴다.
+        const opts = { path: file, fullPage: hasFlag('full') };
+        if (png) opts.type = 'png';
+        else { opts.type = 'jpeg'; opts.quality = SHOT_JPEG_QUALITY; }
+        await page.screenshot(opts);
+
+        // 실제 크기를 같이 낸다 — 한도(파일당 5MB·작업당 50MB)에 언제 닿는지 사람이 감을 잡게.
+        let size;
+        try { size = fs.statSync(file).size; }
+        catch (e) { console.error(`[ERR] 저장 파일을 읽지 못했습니다: ${file} (${e.message})`); process.exit(1); }
+        console.log(`[OK] ${file} (${png ? 'png' : `jpeg q${SHOT_JPEG_QUALITY}`}, ${fmtBytes(size)})`);
     },
 
     // 화면 크기 고정 — 검증 판정의 기준선(SKILL.md §0.2 1.5단계 표준 뷰포트).

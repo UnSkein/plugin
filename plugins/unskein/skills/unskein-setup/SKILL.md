@@ -220,7 +220,11 @@ TESTER 가 집는 범위는 **그 토큰 사용자의 멤버십**으로 정해�
                  #   + 담당 단계 스킬이 요구하는 값(T3 — 스킬의 `입력` 절이 단일 출처. 예: frame9 검수의 FRAME9_*)
   PROJECT.md     # 프로젝트 오리엔테이션 — 이 config 프로젝트의 서버 설명(R0-4 규약과 같은 형식·멱등)
   cdp\           # 이 config 의 포트↔프로필 페어링 기록(pairing.txt). 프로필 실체는 start.ps1 표준 위치 %USERPROFILE%\.cdp-chrome-<CDP_PROFILE>
-  cases\         # 검증 산출물(리포트·스크린샷·시나리오). report 의 payload 엔 경로만 싣는다
+  cases\         # 검증 산출물(케이스 본문·재사용 스크립트·캡처·raw 진단)이 만들어지는 자리.
+                 #   여기서 끝나지 않고 **셋으로 나뉘어 서버로 올라간다** — 케이스 본문·최상위
+                 #   스크립트는 케이스 저장소(case-sync.py push), shots\·diagnostics\ 는 그 작업의
+                 #   증거(queue.js artifacts), 나머지는 이 단말에만. 무엇이 어디로 가는지·한도는
+                 #   `unskein-test` §0.2·§0.3 이 단일 출처다(여기 베끼지 않는다).
 ```
 
 - 템플릿 `${CLAUDE_PLUGIN_ROOT}/templates/tester.ps1.sample` 을 복사해 편집기로 채운다(값은 `$env:` — PowerShell 은 bash `export` 를 로드하지 않는다. 비밀은 화면·셸 인자로 넣지 말 것):
@@ -257,7 +261,9 @@ TESTER 가 집는 범위는 **그 토큰 사용자의 멤버십**으로 정해�
 | `FRAME9_API_BASE` | FrameWeb 접점(migration9 API + 프리뷰 화면). 실측 `https://frameweb.mupai.studio` — ⚠️ `dev.mupai.studio` 아님(PAT 발급용 별개 플랫폼이라 migration9 API 가 없다) | 절차 1 QUESTION |
 | `FRAME9_API_TOKEN` | 백엔드 조회 인증(`X-FrameWeb-Token` 헤더 값) | 절차 1 QUESTION |
 | `FRAME9_BIS_ID` | 이관 작업공간 키(frmcmp-tree 조회 필터 · 프리뷰 활성 비즈니스 대조) | 절차 1 QUESTION |
-| `UNSKEIN_BUSINESS_ID` | 케이스 동기용 비즈니스 **id**(이름 아님 — tester 토큰에는 이름→id 해석 권한이 없어 id 를 직접 둔다) | 케이스 동기만 미실행(검증은 진행 — 리포트에 명시) |
+| `UNSKEIN_BUSINESS_ID` | 케이스 동기용 비즈니스 **번호(숫자 id)**. 이름은 안 된다 — 이름→id 해석은 planner 토큰 전용이라 tester 토큰이 이름을 주면 401 로 멈춘다 | 케이스 동기만 미실행(검증은 진행 — 리포트에 명시) |
+
+**⚠️ `UNSKEIN_BUSINESS_ID` 는 비면 조용히 묻힌다 — 셋업 때 반드시 채운다.** 검증 자체는 정상으로 돌고 카드도 전진하므로 **화면에는 아무 이상이 없어 보인다.** 2026-07-29 실측에서 이 값이 비어 있어 **12일 동안 케이스가 한 건도 안 올라갔는데 아무도 몰랐다** — 사유는 카드의 검증 결과에 정확히 적혀 있었지만 보는 자리가 없어 묻혔다. 값을 모르면 빈 채로 진행하지 말고 **여기서 멈추고 번호를 확인한다**(웹에서 그 비즈니스를 연 주소, 또는 플래너). 이미 돌고 있는 번들에서 이 증상이 의심되면 `unskein-doctor` 11번 갈래로 카드·서버 로그·env 를 순서대로 본다.
 
 **CDP 프로필 로그인도 전제다** — 프리뷰 화면은 developer 등급 로그인 + 활성 비즈니스 = `FRAME9_BIS_ID` 를 요구한다. 프로필에 그 로그인이 없거나 만료면 401 로 튕겨 검증 불능이다. T4 에서 `start.ps1` 로 프로필을 띄운 뒤 한 번 로그인해 둔다(프로필에 남는다).
 
@@ -267,9 +273,10 @@ TESTER 가 집는 범위는 **그 토큰 사용자의 멤버십**으로 정해�
 - **경로 2(격리·병렬)**: config 마다 **새 창**에서 `. tester.ps1` →
   ```powershell
   & "$env:CLAUDE_PLUGIN_ROOT\skills\unskein-test\scripts\start.ps1" -Port $env:CDP_PORT -Profile $env:CDP_PROFILE
-  # 한 tick: claim(--business/--project) → remote.js collect/attrs/shot → report --status=inspect|plan --doc=<cases\...> --payload=<cases\...>
+  # 한 tick: claim(--business/--project) → remote.js viewport/collect/attrs/shot → case-sync.py push
+  #          → queue.js artifacts <id> --dir=<cases\...> → report --status=... --doc=<cases\...> --payload=<cases\...>
   ```
-  산출물은 그 config 의 `cases\` 에 남기고 payload 엔 경로만. 연속 운용은 CronCreate `*/5` 를 **config 마다** 건다. 한 tick 상세는 설치가이드(윈도우) §6.1 = `unskein-test` §0.2.
+  산출물은 그 config 의 `cases\` 에서 만들어 **서버로 올린다** — 케이스 본문·스크립트는 `case-sync.py push`, 캡처·raw 진단은 `queue.js artifacts`(안 올리면 플래너가 웹에서 근거를 못 연다). 연속 운용은 CronCreate `*/5` 를 **config 마다** 건다. 한 tick 상세는 설치가이드(윈도우) §6.1 = `unskein-test` §0.2.
 
 **격리 누출 방지(경로 2)**: ① config 마다 **다른 tester 토큰**(같은 토큰·겹치는 범위면 lease 펜싱이 두 tick 을 못 가른다 — T0-선결 3). ② config 마다 **새 창**(이전 config 의 `$env:UNSKEIN_MORI_TOKEN`·`CDP_PORT` 가 셸에 남으면 엉뚱하게 붙는다). ③ 포트·프로필 **1:1 고정**(공유 시 로그인 혼입).
 

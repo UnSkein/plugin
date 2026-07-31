@@ -24,12 +24,18 @@
  *                                              검증 결과 보고. --status 는 claim 이 배달한
  *                                              stage.reportable_next 중 하나(어휘는 정의 소유·서버 검증).
  *                                              --stage 생략 시 서버에서 이 카드의 현재 단계를 읽어 쓴다.
+ *   artifacts <task_id> --dir=<케이스폴더>       증거 파일 업로드 — <dir>/shots(kind=shot) +
+ *              | --file=<경로> --kind=<종류>     <dir>/diagnostics(kind=diag) 최상위를 작업에 붙인다.
+ *              [--build-sha=<sha>]              단일 파일은 --file + --kind(shot|diag|report).
+ *                                              --build-sha 는 검증 대상 사이트의 배포 SHA
+ *                                              (생략하면 서버가 자기 배포 SHA 를 새긴다).
  *   question <task_id> --text=<q> [--session=<id>]  사양/버그 판단 필요 시 사람에게 질문(waiting)
  *
  * 예:
  *   node queue.js claim --project=unskein
  *   node queue.js report 412 --status=inspect --summary="화면검증 통과" \
  *        --doc=cases/412/report.md --payload=cases/412/payload.json
+ *   node queue.js artifacts 412 --dir=$UNSKEIN_HOME/cases/localhost-5151/forge/chat-panel-send
  *
  * 출력: 항상 JSON 한 줄(성공/실패 모두). 스킬(클로드 세션)이 파싱해 다음 단계를 정한다.
  */
@@ -153,7 +159,11 @@ async function api(method, path, body) {
   if (typeof fetch !== "function") die("node18+ 필요 (전역 fetch 없음)");
   const url = API_BASE + path;
   const headers = { "X-Mori-Token": TOKEN };
-  if (body !== undefined) headers["Content-Type"] = "application/json";
+  // multipart 는 경계 문자열을 fetch 가 만든다 — Content-Type 을 직접 붙이면 경계가
+  // 어긋나 서버가 본문을 못 읽는다. 재시도는 그대로 쓴다(undici FormData 는 스트림이
+  // 아니라 메모리 본문이라 재전송이 안전하다).
+  const isForm = typeof FormData === "function" && body instanceof FormData;
+  if (body !== undefined && !isForm) headers["Content-Type"] = "application/json";
   // 5xx/네트워크는 지수 백오프 재시도, 4xx 는 영구(계약 위반이니 그대로 드러낸다).
   let lastErr;
   for (let attempt = 0; attempt < 4; attempt++) {
@@ -161,7 +171,7 @@ async function api(method, path, body) {
       const res = await fetch(url, {
         method,
         headers,
-        body: body !== undefined ? JSON.stringify(body) : undefined,
+        body: body === undefined ? undefined : isForm ? body : JSON.stringify(body),
       });
       const text = await res.text();
       let data;
@@ -180,6 +190,98 @@ function readFileMaybe(p, kind) {
   if (!p) return undefined;
   try { return fs.readFileSync(p, "utf8"); }
   catch (e) { die(`${kind} 파일을 읽지 못했습니다: ${p}`); }
+}
+
+// --- 증거 파일 업로드 (스콥 tester-artifact-store §4) ---
+// 캡처·raw 진단은 **작업**에 귀속한다 — 케이스에 귀속하는 재사용 스크립트(case-sync.py
+// 가 케이스 본문과 함께 DB 로 올린다)와 사는 곳이 다르다(스펙 §2). 그래서 비즈니스
+// 스코프인 case-sync.py 가 아니라 작업 스코프인 이 클라이언트가 맡는다 —
+// POST /api/tasks/{id}/artifacts (multipart: kind + files).
+
+// 서버 models.TASK_ARTIFACT_EXTS 와 같은 목록(.jpeg 는 없다 — .jpg 만).
+// 실행 가능 형식(.js·.ps1·.sh)은 증거로 받지 않는다: 그건 §3 케이스 스크립트 경로다.
+const ARTIFACT_EXTS = new Set([".png", ".jpg", ".webp", ".json", ".txt", ".md", ".log"]);
+// 캡처는 기본 JPEG(remote.js shot, 품질 80)라 .jpg 로 온다. .jpeg 는 서버가 안 받으므로
+// 다른 확장자와 같은 취급(단순 제외)으로 두면 캡처가 통째로 조용히 빠진다 — 명확히 실패시킨다.
+const ARTIFACT_EXT_JPEG = ".jpeg";
+const JPEG_REASON =
+  ".jpeg 는 서버가 받지 않습니다 — 이름을 .jpg 로 바꾸거나 remote.js shot 으로 다시 찍으세요(캡처 기본이 .jpg 입니다)";
+// 서버 _ASSET_NAME_RE 와 같은 규칙. 파이썬 쪽이 `$` 대신 `\Z` 를 쓰는 것과 달리 JS 의
+// `$` 는 (m 플래그 없이는) 끝 개행에 맞지 않아 그대로 두면 된다.
+const ARTIFACT_NAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
+const ARTIFACT_MAX_BYTES = 5 * 1024 * 1024;   // 파일당 — 서버는 413 으로 거부한다
+const ARTIFACT_KINDS = new Set(["shot", "diag", "report"]);
+// 하위 폴더 → kind. **최상위만** 훑는다(재귀 없음) — 무엇이 올라가는지를 구조로 고정한다.
+const ARTIFACT_DIRS = [["shots", "shot"], ["diagnostics", "diag"]];
+
+// 케이스 폴더에서 올릴 파일을 고른다. 못 올리는 파일은 조용히 버리지 않고 사유와 함께
+// skipped 로 돌려준다(스펙 §4.3 — 조용한 절단 금지). 서버 이름은 basename 이라
+// shots/ 와 diagnostics/ 에 같은 이름이 있으면 뒤엣것이 409 로 거부된다(덮어쓰기 금지).
+function collectArtifacts(dir) {
+  const picked = [];
+  const skipped = [];
+  // 어느 폴더를 실제로 훑었는지 남긴다 — 안 남기면 "0건 업로드"가 증거가 없어서인지
+  // 폴더를 안 만들어서인지(캡처를 케이스 폴더로 안 옮긴 경우) 리포트에서 못 가른다.
+  const scanned = [];
+  for (const [sub, kind] of ARTIFACT_DIRS) {
+    const d = path.join(dir, sub);
+    let entries;
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); }
+    catch { scanned.push({ dir: sub, missing: true }); continue; }  // 폴더 없음 = 그 종류의 증거가 없다
+    scanned.push({ dir: sub, entries: entries.length });
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const e of entries) {
+      const rel = `${sub}/${e.name}`;
+      if (!e.isFile()) {
+        skipped.push({ name: rel, reason: "파일이 아닙니다 — 하위 폴더는 올리지 않습니다" });
+        continue;
+      }
+      if (!ARTIFACT_NAME_RE.test(e.name)) {
+        skipped.push({ name: rel, reason: "이름 규칙 위반(^[A-Za-z0-9._-]{1,64}$ — 공백·한글·경로 구분자 불가)" });
+        continue;
+      }
+      const ext = path.extname(e.name).toLowerCase();
+      if (ext === ARTIFACT_EXT_JPEG) {
+        // fatal — 이건 "올릴 대상이 아닌 파일"이 아니라 "올려야 할 캡처인데 이름이 틀린" 것이다.
+        // 그냥 제외하면 ok:true 로 성공 보고가 나가고 근거는 단말에만 남는다.
+        skipped.push({ name: rel, reason: JPEG_REASON, fatal: true });
+        continue;
+      }
+      if (!ARTIFACT_EXTS.has(ext)) {
+        skipped.push({
+          name: rel,
+          reason: `증거 확장자가 아닙니다: ${ext || "(없음)"} (허용 ${[...ARTIFACT_EXTS].join(" ")})`,
+        });
+        continue;
+      }
+      const full = path.join(d, e.name);
+      let size;
+      try { size = fs.statSync(full).size; }
+      catch (err) { skipped.push({ name: rel, reason: `읽지 못했습니다: ${String(err && err.message || err)}` }); continue; }
+      if (size > ARTIFACT_MAX_BYTES) {
+        skipped.push({ name: rel, reason: `파일당 한도 초과: ${size}바이트 / 최대 ${ARTIFACT_MAX_BYTES}` });
+        continue;
+      }
+      picked.push({ path: full, rel, name: e.name, kind, bytes: size });
+    }
+  }
+  return { picked, skipped, scanned };
+}
+
+// 배포 SHA 형식 — 서버 _BUILD_SHA_RE 와 같은 규칙(어긋나면 서버가 422 로 되돌린다).
+const BUILD_SHA_RE = /^[A-Za-z0-9._-]{1,64}$/;
+
+async function uploadArtifact(taskId, file, buildSha) {
+  const fd = new FormData();
+  fd.set("kind", file.kind);
+  // 검증 시점의 배포 SHA — "어느 코드 상태의 화면인가"를 첨부 메타에 새긴다.
+  // 안 주면 서버가 **자기** 배포 SHA 를 쓰므로, 검증 대상이 UnSkein 서버가 아닌 다른
+  // 사이트면 무관한 SHA 가 근거처럼 남는다. 아는 값이 있으면 반드시 실어 보낸다.
+  if (buildSha) fd.set("build_sha", buildSha);
+  // 서버 폼 필드는 files(list[UploadFile]) + kind(Form). 파일명은 basename 만 — 경로가
+  // 섞이면 서버가 422 로 거부한다(파일명이 곧 저장 경로라서).
+  fd.append("files", new Blob([fs.readFileSync(file.path)]), file.name);
+  return api("POST", `/api/tasks/${taskId}/artifacts`, fd);
 }
 
 async function main() {
@@ -234,7 +336,7 @@ async function main() {
   }
 
   const id = args._[0];
-  if (["heartbeat", "report", "question"].includes(cmd) && !id) {
+  if (["heartbeat", "report", "question", "artifacts"].includes(cmd) && !id) {
     return die(`${cmd} 에는 task_id 가 필요합니다`);
   }
 
@@ -282,6 +384,94 @@ async function main() {
     return out({ ok: true, status, stage });
   }
 
+  if (cmd === "artifacts") {
+    // 파일 1건당 POST 1회 — 413/422/409 를 **어느 파일이 걸렸는지**로 귀속시킨다.
+    // 한 번에 묶어 보내면 30개째가 걸렸을 때 앞의 29개도 함께 거부돼 무엇이 문제인지
+    // 안 보인다(서버는 전량 통과일 때만 반영한다).
+    let files = [];
+    let skipped = [];
+    let scanned = null;  // --dir 로 훑은 하위 폴더 실황(0건 업로드의 사유가 된다)
+    // 검증 대상 사이트의 배포 SHA(선택). 생략하면 서버가 자기 배포 SHA 를 새기므로,
+    // **검증 대상이 UnSkein 서버가 아닐 때는 반드시 준다** — 아니면 무관한 SHA 가 그
+    // 화면의 코드 상태인 것처럼 남는다. 형식은 서버와 같은 규칙으로 먼저 거른다.
+    const buildSha = typeof args["build-sha"] === "string" ? args["build-sha"].trim() : "";
+    if (buildSha && !BUILD_SHA_RE.test(buildSha)) {
+      return die("--build-sha 형식이 올바르지 않습니다 (^[A-Za-z0-9._-]{1,64}$)", { value: buildSha });
+    }
+    if (typeof args.file === "string" && args.file) {
+      const kind = typeof args.kind === "string" ? args.kind : "";
+      if (!ARTIFACT_KINDS.has(kind)) {
+        return die(`--file 에는 --kind=<${[...ARTIFACT_KINDS].join("|")}> 가 필요합니다`);
+      }
+      const name = path.basename(args.file);
+      // 단일 파일도 .jpeg 는 여기서 끊는다 — 서버 422 를 기다리면 사유가 "확장자 불가"로만
+      // 남아 사람이 .jpg 로 고치면 된다는 걸 못 읽는다.
+      if (path.extname(name).toLowerCase() === ARTIFACT_EXT_JPEG) {
+        return die(JPEG_REASON, { file: args.file });
+      }
+      let size;
+      try { size = fs.statSync(args.file).size; }
+      catch { return die(`증거 파일을 읽지 못했습니다: ${args.file}`); }
+      files = [{ path: args.file, rel: args.file, name, kind, bytes: size }];
+    } else if (typeof args.dir === "string" && args.dir) {
+      // 폴더 자체가 없으면 멈춘다 — 오타·잘못된 경로를 "올릴 것 없음"의 성공으로 넘기면
+      // 증거가 단말에만 남은 채 성공 보고가 나간다(조용한 성공 금지).
+      if (!fs.existsSync(args.dir) || !fs.statSync(args.dir).isDirectory()) {
+        return die(`증거 폴더가 없습니다: ${args.dir} (케이스 폴더 경로를 확인하세요)`);
+      }
+      const found = collectArtifacts(args.dir);
+      files = found.picked;
+      skipped = found.skipped;
+      scanned = found.scanned;
+    } else {
+      return die("artifacts 에는 --dir=<케이스폴더> 또는 --file=<경로> --kind=<종류> 가 필요합니다");
+    }
+
+    const uploaded = [];
+    const rejected = [];
+    let items = null;  // 서버가 가진 전체 메타 목록(마지막 성공 응답이 곧 최종 상태)
+    for (const f of files) {
+      const r = await uploadArtifact(id, f, buildSha);
+      if (r && r.status === 200) {
+        uploaded.push({ name: f.name, kind: f.kind, bytes: f.bytes, from: f.rel });
+        items = r.data.items || [];
+      } else {
+        // 실패해도 다음 파일로 간다 — 어디서 끊겼는지 전부 드러내야 한도(누적 30개·50MB)에
+        // 걸린 지점을 사람이 판단할 수 있다. detail 은 서버 문구 그대로(비밀 없음).
+        rejected.push({
+          name: f.name,
+          from: f.rel,
+          status: (r && r.status) || 0,
+          detail: (r && r.data && (r.data.detail || r.data.error)) || null,
+        });
+      }
+    }
+    if (items === null) {
+      // 하나도 못 올렸으면 서버가 이미 가진 목록을 읽는다(이전 tick 의 증거가 있을 수 있다).
+      const r = await api("GET", `/api/tasks/${id}/artifacts`);
+      if (!r || r.status !== 200) {
+        return die("증거 메타 목록을 읽지 못했습니다", { status: r && r.status, uploaded, rejected, skipped, scanned });
+      }
+      items = r.data.items || [];
+    }
+    // artifacts = payload 에 그대로 실을 서버 진실(name·kind·bytes·sha256).
+    // fatal skipped(.jpeg 캡처)도 실패로 센다 — 서버에 안 갔는데 ok:true 면 침묵 실패다.
+    const fatalSkipped = skipped.filter((s) => s.fatal);
+    const result = {
+      ok: rejected.length === 0 && fatalSkipped.length === 0,
+      artifacts: items,
+      uploaded,
+      rejected,
+      skipped,
+    };
+    if (scanned) result.scanned = scanned;
+    out(result);
+    // 조용한 성공 금지 — 거부가 있으면 종료코드로도 드러낸다. process.exit 대신 exitCode 를
+    // 쓰는 이유: 파이프로 나가는 stdout 은 비동기라 즉시 exit 하면 이 JSON 이 잘릴 수 있다.
+    if (!result.ok) process.exitCode = 1;
+    return;
+  }
+
   if (cmd === "question") {
     if (!args.text) return die("question 에는 --text 가 필요합니다");
     const body = { question: args.text };
@@ -291,7 +481,7 @@ async function main() {
     return out({ ok: true, waiting: true });
   }
 
-  die(`알 수 없는 명령: ${cmd || "(없음)"} — scope|claim|heartbeat|report|question`);
+  die(`알 수 없는 명령: ${cmd || "(없음)"} — scope|claim|heartbeat|report|artifacts|question`);
 }
 
 main().catch((e) => die("예외: " + String(e && e.message || e)));
