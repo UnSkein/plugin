@@ -14,6 +14,7 @@
  *   node remote.js tabs
  *   node remote.js navigate <url> [--tab=<sel>] [--new]
  *   node remote.js shot <name> [--tab=<sel>] [--full]
+ *   node remote.js viewport [<w>x<h>] [--tab=<sel>]       # 화면 크기 고정/확인 (기준 1920x1080)
  *   node remote.js click <selector> [--tab=<sel>]
  *   node remote.js type <selector> <text> [--tab=<sel>]   # React 호환 native setter 사용
  *   node remote.js eval "<js expr>" [--tab=<sel>]
@@ -132,6 +133,31 @@ const COMMANDS = {
         const file = path.join(SHOT_DIR, `${name}.png`);
         await page.screenshot({ path: file, fullPage: hasFlag('full') });
         console.log(`[OK] ${file}`);
+    },
+
+    // 화면 크기 고정 — 검증 판정의 기준선(SKILL.md §0.2 1.5단계 표준 뷰포트).
+    // **창 크기가 아니라 페이지 뷰포트를 잡는다**: 창 최대화는 모니터·작업표시줄·주소창에
+    // 따라 1920×945 / 2560×1300 으로 제각각이라 재현이 안 되고, "안 보인다"가 결함인지
+    // 환경인지 영영 못 가른다. setViewportSize 는 물리 모니터보다 큰 값도 잡히므로
+    // 노트북 단말에서도 기준 1920×1080 을 그대로 얻는다(캡처도 같은 크기로 나온다).
+    // 인자 없이 부르면 현재 값만 읽는다 — 리포트·케이스에 실제 값을 적을 때 쓴다.
+    async viewport(context) {
+        const [, size] = positional();
+        const page = pickPage(context, getOpt('tab'));
+        if (!page) { console.error('[ERR] 탭 없음'); process.exit(1); }
+        if (size) {
+            const m = /^(\d{3,5})[x×](\d{3,5})$/.exec(size.trim());
+            if (!m) {
+                console.error('Usage: viewport [<width>x<height>]  (예: 1920x1080)');
+                process.exit(1);
+            }
+            await page.setViewportSize({ width: Number(m[1]), height: Number(m[2]) });
+        }
+        // 적용 결과를 페이지에서 되읽는다 — 지정값을 그대로 믿지 않는다(적용 실패를 드러낸다).
+        const actual = await page.evaluate(
+            () => ({ w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio })
+        );
+        console.log(`[OK] viewport ${actual.w}x${actual.h} (dpr ${actual.dpr})`);
     },
 
     async click(context) {
