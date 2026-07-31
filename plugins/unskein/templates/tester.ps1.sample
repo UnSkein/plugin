@@ -30,10 +30,12 @@ $env:UNSKEIN_MORI_TOKEN = ""
 $env:UNSKEIN_WATCH_BUSINESS = "MUPAISTUDIO"
 $env:UNSKEIN_WATCH_PROJECT  = "UNSKEIN_SAAS"
 
-# ── 케이스 동기용 비즈니스 id ──
+# ── 케이스 동기용 비즈니스 id ── ⚠️ 비워 두면 케이스가 조용히 안 쌓인다
 # 이름이 아니라 **id**(숫자)다 — 이름→id 해석은 planner 토큰 전용이라 tester 는 id 를 직접 둔다.
 # 얻는 법: 웹에서 그 비즈니스를 연 주소의 id, 또는 플래너에게 확인. 미설정이면 케이스 pull/push 가
 # 명확히 멈춘다(검증 자체는 진행 — 리포트에 "케이스 동기 미실행" 명시. unskein-test §0.2).
+# 그래서 **화면에는 이상이 없어 보인다** — 검증은 돌고 카드도 전진한다. 2026-07-29 실측에서
+# 이 값이 비어 12일 동안 케이스가 한 건도 안 올라갔는데 아무도 몰랐다. 번들을 만들 때 반드시 채운다.
 $env:UNSKEIN_BUSINESS_ID = ""
 
 # ── CDP 포트↔프로필 페어링 (병렬 격리 = 경로 2 필수) ──
@@ -62,6 +64,9 @@ $env:CDP_PROFILE = "MUPAISTUDIO__UNSKEIN_SAAS"   # 보통 <business>__<project>
 #   ⚠️ CDP 프로필에 developer 등급 로그인 + 활성 비즈니스가 이 값으로 맞춰져 있어야 프리뷰가 열린다.
 #$env:FRAME9_BIS_ID    = ""
 
-# (선택) 이 config 전용 산출물 폴더 — report 의 payload 엔 경로만 싣는다(파일은 여기/저장소에).
+# (선택) 이 config 전용 산출물 폴더 — 검증 산출물이 만들어지는 자리다.
+#   여기서 끝나지 않고 서버로 올라간다: 케이스 본문·최상위 스크립트는 case-sync.py push(케이스
+#   저장소), shots\·diagnostics\ 의 캡처·raw 진단은 queue.js artifacts(그 작업의 증거).
+#   무엇이 어디로 가는지·한도는 unskein-test §0.2·§0.3 이 단일 출처다(여기 베끼지 않는다).
 #   번들 관례일 뿐 스크립트가 읽는 변수는 아니다(report --doc/--payload 에 경로로 직접 지정).
 #$env:UNSKEIN_TESTER_CASES = "$env:USERPROFILE\.unskein\MUPAISTUDIO__UNSKEIN_SAAS\cases"

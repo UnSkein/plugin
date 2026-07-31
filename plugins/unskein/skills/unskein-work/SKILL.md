@@ -75,10 +75,20 @@ python3 "${CLAUDE_PLUGIN_ROOT}/orchestrator/work.py" prepare bis "비즈니스�
 `WORK_DIR` 로 들어가, 그 상위에 이식된 **다오 스킬을 따라** `DAO PROMPT` 를 수행한다:
 
 - 작업폴더 규약: `WORK_DIR/../CLAUDE.md`(다오 정체성·출력 규약·단계 순서·절대 규칙) + `WORK_DIR/../.claude/skills/`(단계 스킬: `unskein-exec`·`unskein-verify`·`unskein-wiki-*`·`unskein-git`). **무repo 프로젝트는 WORK_DIR 가 작업 폴더 자체라 `WORK_DIR/CLAUDE.md` + `WORK_DIR/.claude/skills/` 다**(prepare 출력의 상대경로 안내를 따른다). 프롬프트가 지시한 **현재 단계만** 수행한다(`plan`=구현+자체검증 / `inspect`=기록·마감·PR 등).
-- **`test` 단계 = CDP 화면검증**: 프롬프트 대신 **`unskein-test`(§1–7 수동 진단 절차)로 실제 화면을 검증**한다 — `start.ps1` 로 CDP Chrome 기동, `remote.js navigate/collect/attrs/shot` 로 수용 기준의 시나리오 수행(WSL 세션이면 `powershell.exe`·윈도우 Node 로 호출, `unskein-test` §6). 케이스 흡수·기록(`unskein-case`)과 리포트 표준(`unskein-test` §0.5)도 그대로 적용한다. 판정을 마커로 옮긴다:
+- **`test` 단계 = CDP 화면검증**: 프롬프트 대신 **`unskein-test`(§1–7 수동 진단 절차)로 실제 화면을 검증**한다 — `start.ps1` 로 CDP Chrome 기동, `remote.js viewport/navigate/collect/attrs/shot` 로 수용 기준의 시나리오 수행(`viewport` 로 표준 1920×1080 을 먼저 고정한다 — 창 크기가 다르면 레이아웃 판정이 흔들린다. WSL 세션이면 `powershell.exe`·윈도우 Node 로 호출, `unskein-test` §6). 케이스 흡수·기록(`unskein-case`)·**증거 업로드**(아래)·리포트 표준(`unskein-test` §0.5)도 그대로 적용한다. 판정을 마커로 옮긴다:
   - PASS → `RESULT: status=inspect stage=test summary=...` (+ 검증 리포트를 DOC 펜스에)
   - FAIL → `RESULT: status=plan stage=test summary=...` (실패 근거 포함 — 구현자가 다시 집는다)
   - 검증 결과 구조(verdict·scenarios·findings — `unskein-test` §0.3)는 JSON 파일로 저장해 §1.3 의 `--payload-file` 로 싣는다.
+  - **증거 업로드는 이 세션이 직접 해야 한다(빠지기 쉬운 자리)**: 이 모드는 `queue.js report` 가 아니라 `work.py report --payload-file` 로 회수하므로, 자율 루프의 업로드 단계(`unskein-test` §0.2 6단계)가 **자동으로 따라오지 않는다.** 안 올리면 리포트에 경로 문자열만 남고 캡처·raw 진단은 이 단말에만 남아, 플래너가 웹에서 근거를 못 연다. 마커를 쓰기 **전에** 올린다:
+    ```bash
+    UNSKEIN_API_BASE="$UNSKEIN_API" \
+    node "${CLAUDE_PLUGIN_ROOT}/skills/unskein-test/scripts/queue.js" artifacts <TASK_ID> \
+         --dir="$UNSKEIN_HOME/cases/<host>/<feature>/<slug>"
+    ```
+    - `UNSKEIN_API_BASE` 를 붙이는 이유: `queue.js` 는 `UNSKEIN_API` 가 아니라 `UNSKEIN_API_BASE` 를 읽어, 안 주면 기본값 `http://127.0.0.1:8000` 으로 붙어 실패한다. 인증은 executor.env 의 `UNSKEIN_MORI_TOKEN`(kind=mori) 그대로 — 첨부 라우트는 사용자 단위 인가라 mori 토큰도 자기 프로젝트 작업에 올릴 수 있다.
+    - 대상·한도·거부 코드(413·409·422)는 `unskein-test` §0.2 6단계가 단일 출처다(여기 베끼지 않는다).
+    - **`--payload-file` 에 `artifacts` 를 손으로 적지 않는다** — 증거 메타의 주인은 서버(업로드 라우트)라 보고에 실어 보낸 값은 서버가 자기 기록으로 되돌린다. 업로드만 하면 결과 뷰에 붙는다.
+    - 실패·미실행은 조용히 넘기지 않는다 — 리포트 본문에 "증거 업로드 미실행(사유)" 한 줄 + payload 에 `artifacts_error` 로 남긴다(`unskein-test` §0.2·§0.3). 원인 갈래는 `unskein-doctor` 12번.
   - **예외 — CDP 검증 의뢰 카드(`payload.cdp_request`)**: 이 카드의 종단 remap(PASS/FAIL 모두 done 마감, ADR-0019)은 **tester 토큰 보고에서만** 발동한다. mori 토큰의 수동 보고는 inspect 로 가서 마감 파이프라인(커밋·PR)을 잘못 탄다 — 이 카드는 자율 TESTER 루프(`unskein-test` §0)에 맡긴다.
 - clone/pull/checkout 을 직접 하지 않는다 — `prepare` 가 이미 결정적으로 준비했다. `WORK_DIR` 안에서 작업만 한다.
 - **git 인증(주의)**: 다오의 push(inspect 단계)는 **이 세션 자신의 git/gh 인증**(executor.env + `gh auth`)을 쓴다 — 헤드리스처럼 scrubbed env 를 주입하지 않는다. master 직접 머지·배포는 하지 않는다(PR 까지 — 머지되면 자동 배포).

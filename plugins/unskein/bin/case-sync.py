@@ -4,18 +4,26 @@
 TESTER 검증 노하우(케이스)를 서버에 축적해 사용자·단말 간 재사용한다.
 키 = (사용자 × 비즈니스 × 호스트 × 기능 × 이름). `bin/memory-sync.py` 의 케이스판.
 
-- push: 로컬 케이스(`case.md`)들을 서버에 upsert. 파일(shots/ 등)은 제외,
+- push: 로컬 케이스(`case.md` + 폴더 최상위 재사용 스크립트)를 서버에 upsert.
   content_hash 동일이면 skip. **자기 소유 파일만** — `_public/` 은 읽기 전용이라 제외.
 - pull: 내 케이스 전부 + 같은 비즈니스의 (해당 호스트) public 케이스 전부를
   로컬에 풀고 `INDEX.md` 를 재생성한다. 남의 public 은 `_public/<작성자>/` 하위.
+  받은 스크립트는 케이스 폴더에 **실행 가능한 상태로** 떨군다.
 
 ── 로컬 레이아웃 (ADR-0020: UNSKEIN_HOME 규약) ────────────────────────
   $UNSKEIN_HOME/cases/                     (UNSKEIN_HOME 미설정 시 ~/.unskein/cases)
     INDEX.md                               ← pull 이 로컬 파일들로부터 재생성(기계 생성)
-    <host>/<feature>/<slug>/case.md        ← 내 케이스(본문만 서버로)
-    <host>/<feature>/<slug>/shots/…        ← 스크린샷 등 파일(서버 미전송)
-    <host>/<feature>/<slug>/diagnostics/…  ← raw 진단 데이터(서버 미전송)
+    <host>/<feature>/<slug>/case.md        ← 내 케이스 본문
+    <host>/<feature>/<slug>/*.js|.mjs|.py|.ps1|.sh   ← 재사용 스크립트(서버 전송)
+    <host>/<feature>/<slug>/shots/…        ← 스크린샷 등 파일(케이스 저장소 미전송)
+    <host>/<feature>/<slug>/diagnostics/…  ← raw 진단 데이터(케이스 저장소 미전송)
     _public/<작성자>/<host>/<feature>/<slug>/case.md   ← 남의 public(읽기 전용)
+
+**폴더 최상위 스크립트는 전부 올라간다** — public 케이스면 비즈니스 멤버 전체가
+본다. 안 올릴 파일은 하위 폴더(`shots/`·`diagnostics/`·임의 폴더)로 옮긴다.
+`shots/`·`diagnostics/` 는 케이스가 아니라 **그 회차 작업**에 귀속하는 증거라
+이 CLI 가 아니라 `queue.js artifacts` 가 작업에 첨부한다(수명이 다르다 — 스콥
+tester-artifact-store §2).
 
 ── 케이스 frontmatter 규약 ────────────────────────────────────────────
     ---
@@ -37,8 +45,11 @@ host[:port] 에서 `:` → `-`. 예: `http://localhost:5151/x` → `localhost-51
 
 ── 서버 계약 (6.1 UNS-548 — backend /api/cases/*) ─────────────────────
   POST /api/cases/push  {business_id, items:[{host,feature,name,title,status,
-                         tags,visibility,body,task_id?,tested_url?}]}
-                        → {upserted, skipped}   (body=파일 원문 전체, 무손실 왕복)
+                         tags,visibility,body,scripts?,task_id?,tested_url?}]}
+                        → {upserted, skipped, scripts_upserted}
+                        (body=파일 원문 전체, 무손실 왕복 · scripts=[{name,body}])
+                        스크립트를 실어 보냈는데 응답에 `scripts_upserted` 가 없으면
+                        스크립트를 모르는 구서버라 멈춘다(조용히 버려짐 방지).
   GET  /api/cases/pull  ?business_id=&host=     → {items:[…]}
                         item 소유 구분: `mine`(bool) 또는 `owner`(username —
                         /api/whoami 의 user 와 비교). 둘 다 없으면 멈춘다(fallback 금지).
@@ -82,6 +93,17 @@ for _s in (sys.stdout, sys.stderr):
 
 CASE_FILE = "case.md"
 PUBLIC_DIR = "_public"  # 남의 public 케이스 — 읽기 전용, push 제외
+
+# 재사용 스크립트 규약(스콥 tester-artifact-store §3) — 서버 한도와 같은 값을 여기
+# 한 자리에 둔다. 두 SKILL.md 는 이 상수를 가리킨다(수치 재기술 금지).
+# 이름 규칙에 `$` 대신 `\Z` 를 쓰는 이유: `$` 는 끝의 개행 앞에서도 맞는다.
+SCRIPT_EXTS = (".js", ".mjs", ".py", ".ps1", ".sh")
+SCRIPT_NAME_RE = re.compile(r"\A[A-Za-z0-9._-]{1,64}\Z")
+SCRIPT_MAX_FILES = 10
+SCRIPT_MAX_BYTES = 256 * 1024
+# POST 당 본문 예산 — 스크립트가 실리면 케이스당 최대 256KB 라 건수만으로 나눈
+# 청크가 nginx 본문 한도(413)에 걸린다(#562 P2 가 스크립트 때문에 재발).
+PUSH_MAX_BYTES = 1_000_000
 INDEX_HEADER = (
     "# 케이스 인덱스\n\n"
     "> `case-sync.py pull` 이 로컬 파일들로부터 재생성하는 기계 생성 파일 — 직접 편집 금지.\n"
@@ -284,12 +306,58 @@ class Config:
 
 # ─────────────────────────── 로컬 케이스 스캔 ───────────────────────────
 
-def scan_local_cases(root, host_filter=None):
+def collect_scripts(case_dir):
+    """케이스 폴더 **최상위**의 재사용 스크립트를 수집 — (scripts:[{name,body}], probs:[str]).
+
+    최상위만 훑고 재귀하지 않는다 — 이 한 줄이 `shots/`·`diagnostics/` 제외를
+    구조적으로 보장한다(하위 폴더를 아예 열거하지 않으므로 새 하위 폴더가 생겨도
+    자동 제외, 목록 유지보수 불요).
+
+    서버와 같은 한도를 여기서 먼저 건다 — 청크 중간에 422 가 나면 앞 청크는 이미
+    커밋돼 부분 적용이 남는다. 결정적인 위반(이름·개수·용량·인코딩)은 스캔에서
+    걸러 그 케이스만 제외하고, 비밀 탐지는 서버에 맡긴다.
+    """
+    scripts, probs = [], []
+    total = 0
+    try:
+        entries = sorted(os.listdir(case_dir))
+    except OSError as e:
+        return scripts, [f"케이스 폴더를 읽을 수 없음: {e}"]
+    for fn in entries:
+        path = os.path.join(case_dir, fn)
+        if fn == CASE_FILE or not os.path.isfile(path):
+            continue
+        if os.path.splitext(fn)[1].lower() not in SCRIPT_EXTS:
+            continue  # 스크립트 확장자가 아닌 최상위 파일은 대상 밖(위반 아님)
+        if not SCRIPT_NAME_RE.match(fn):
+            probs.append(f"스크립트 이름 규칙 위반: {fn!r} (^[A-Za-z0-9._-]{{1,64}}$)")
+            continue
+        try:
+            with open(path, encoding="utf-8-sig") as fh:  # BOM 허용(case.md 와 동일)
+                body = normalize_body(fh.read())
+        except UnicodeDecodeError:
+            # 바이너리·cp949 를 조용히 넘기지 않는다 — 서버는 텍스트만 받는다.
+            probs.append(f"스크립트가 UTF-8 이 아님: {fn}")
+            continue
+        total += len(body.encode("utf-8"))
+        scripts.append({"name": fn, "body": body})
+    if len(scripts) > SCRIPT_MAX_FILES:
+        probs.append(f"스크립트 {len(scripts)}개 — 최대 {SCRIPT_MAX_FILES}개")
+    if total > SCRIPT_MAX_BYTES:
+        probs.append(f"스크립트 총합 {total}바이트 — 최대 {SCRIPT_MAX_BYTES}바이트")
+    return scripts, probs
+
+
+def scan_local_cases(root, host_filter=None, with_scripts=False):
     """`<root>/<host>/<feature>/<slug>/case.md` 를 (fields, raw, relpath) 로 수집.
 
     `_public/` 은 제외(읽기 전용). frontmatter 의 host/feature/name 이 디렉토리와
     다르면 오류로 모은다 — 키 불일치는 서버에서 남의 자리·빈손 pull 을 만든다.
     반환: (valid:[dict], errors:[str])
+
+    `with_scripts` 는 **push 만** 켠다(기본 False). INDEX 재생성(_index_lines_for)이
+    같은 함수를 작성자 수만큼 다시 부르는데, 거기서 스크립트를 읽으면 파일 I/O 를
+    통째로 반복하고 한도 위반 케이스가 INDEX 에서 통째로 사라진다.
     """
     valid, errors = [], []
     if not os.path.isdir(root):
@@ -322,6 +390,10 @@ def scan_local_cases(root, host_filter=None):
                 vis = fields.get("visibility") or "public"
                 if vis not in ("public", "private"):
                     probs.append(f"visibility={vis!r} (public|private 만)")
+                scripts = []
+                if with_scripts:
+                    scripts, sprobs = collect_scripts(os.path.join(fdir, slug))
+                    probs += sprobs  # 스크립트 위반도 같은 오류 채널로 흐른다
                 if probs:
                     errors.append(f"{rel}: " + " · ".join(probs))
                     continue
@@ -335,6 +407,8 @@ def scan_local_cases(root, host_filter=None):
                     "visibility": vis,
                     "body": raw,  # 파일 원문 전체 — 무손실 왕복
                 }
+                if scripts:  # 없으면 키 자체를 안 보낸다(구서버 호환 + 해시 축 불변)
+                    item["scripts"] = scripts
                 if str(fields.get("task_id") or "").isdigit():
                     item["task_id"] = int(fields["task_id"])
                 if fields.get("tested_url"):
@@ -345,32 +419,68 @@ def scan_local_cases(root, host_filter=None):
 
 # ─────────────────────────── push ───────────────────────────
 
+def _chunks(items, max_items, max_bytes=PUSH_MAX_BYTES):
+    """건수와 누적 바이트 중 **먼저 닿는 쪽**에서 끊는다(#562 P2 의 스크립트판).
+
+    한 건이 홀로 예산을 넘어도 잘라내지 않고 단독 청크로 보낸다 — 한도 판정은
+    서버가 하고 사유를 알린다(클라이언트가 조용히 줄이지 않는다).
+    """
+    part, size = [], 0
+    for it in items:
+        n = len(json.dumps(it, ensure_ascii=False).encode("utf-8"))
+        if part and (len(part) >= max_items or size + n > max_bytes):
+            yield part
+            part, size = [], 0
+        part.append(it)
+        size += n
+    if part:
+        yield part
+
+
 def cmd_push(cfg, root, business_arg, host_filter, dry_run, chunk=50):
-    items, errors = scan_local_cases(root, host_filter)
+    # push 만 스크립트를 함께 읽는다(INDEX 재생성 경로는 기본 False 로 둔다).
+    items, errors = scan_local_cases(root, host_filter, with_scripts=True)
     for e in errors:
         print(f"[push] 규약 위반(제외됨): {e}", file=sys.stderr)
     if not items:
         print(f"[push] 보낼 케이스 없음: {root}" + (f" (host={host_filter})" if host_filter else ""))
         return 1 if errors else 0
     business_id = cfg.resolve_business_id(business_arg)
+    n_scripts = sum(len(it.get("scripts") or []) for it in items)
     if dry_run:
         for it in items:
+            sc = it.get("scripts") or []
+            extra = (" · 스크립트 " + ", ".join(s["name"] for s in sc)) if sc else ""
             print(f"[push:dry-run] {it['host']}/{it['feature']}/{it['name']} "
-                  f"({it['visibility']}, {len(it['body'])}자)")
-        print(f"[push:dry-run] business_id={business_id} 대상 {len(items)}건, 규약 위반 {len(errors)}건")
+                  f"({it['visibility']}, {len(it['body'])}자){extra}")
+        print(f"[push:dry-run] business_id={business_id} 대상 {len(items)}건"
+              f"(스크립트 {n_scripts}개), 규약 위반 {len(errors)}건")
         return 1 if errors else 0
     # 대량 push 는 청크로 나눈다(#562 P2) — 단일 POST 는 nginx 본문 한도(413)에 걸린다.
     # 청크 단위 POST 는 멱등(hash 동일 skip)이라 중간 실패 후 재실행이 안전하다.
     chunk = max(1, int(chunk or 50))
-    up = sk = 0
-    for i in range(0, len(items), chunk):
-        part = items[i:i + chunk]
+    up = sk = su = 0
+    done = 0
+    parts = list(_chunks(items, chunk))
+    for part in parts:
         out = cfg.post("/api/cases/push", {"business_id": business_id, "items": part})
+        # 구서버는 모르는 입력 필드(scripts)를 조용히 버린다 — 200 을 받아도 저장이
+        # 안 됐을 수 있다. 접수 신호 키의 존재로 판별해 멈춘다(claim skills 에코 검증
+        # 과 같은 규약). "올렸다고 믿는 무해한 실패"가 이 자리에서 제일 비싸다.
+        if any(p.get("scripts") for p in part) and "scripts_upserted" not in out:
+            _die("서버가 스크립트 접수 신호(scripts_upserted)를 돌려주지 않았습니다 — "
+                 "스크립트를 모르는 구버전 서버입니다(케이스 본문만 저장됨). "
+                 "서버를 갱신한 뒤 다시 push 하세요.")
         up += out.get("upserted", 0)
         sk += out.get("skipped", 0)
-        if len(items) > chunk:
-            print(f"[push] 진행 {min(i + chunk, len(items))}/{len(items)}…")
-    print(f"[push] business_id={business_id}: upserted={up} skipped={sk}"
+        su += out.get("scripts_upserted", 0)
+        done += len(part)
+        if len(parts) > 1:
+            print(f"[push] 진행 {done}/{len(items)}…")
+    # scripts 는 "저장/수집" — 무변경(skip) 케이스의 스크립트는 이미 서버에 있어 다시
+    # 저장되지 않는다. 두 수가 다른 것이 정상이라 라벨로 못박는다(실패로 읽히지 않게).
+    print(f"[push] business_id={business_id}: upserted={up} skipped={sk} "
+          f"scripts={su} 저장/{n_scripts} 수집"
           + (f" · 규약 위반 제외 {len(errors)}건" if errors else ""))
     return 1 if errors else 0
 
@@ -389,6 +499,50 @@ def _item_is_mine(item, my_user):
     _die("pull 응답에 소유 구분 필드(mine/owner)가 없습니다 — 서버(6.1) 계약을 확인하세요.")
 
 
+def _write_scripts(cdir, scripts):
+    """받은 스크립트를 케이스 폴더에 **실행 가능한 상태로** 떨군다 — (written, skipped, probs).
+
+    이름을 여기서 다시 검증한다 — pull 은 남의 public 도 받으므로 파일명이 곧 로컬
+    쓰기 경로다(서버 검증을 믿지 않는 이중 방어). 위반은 조용히 버리지 않고 probs
+    로 올려 호출부가 stderr 와 종료코드에 싣는다.
+
+    **삭제는 하지 않는다** — 서버에서 사라진 스크립트를 로컬에서 지우면 테스터가
+    작업 중인 파일을 없앨 수 있다. 이 비대칭(덮어쓰되 지우지 않음)은 case.md 와 같다.
+    """
+    written = skipped = 0
+    probs = []
+    for s in scripts or []:
+        name = (s or {}).get("name") or ""
+        body = (s or {}).get("body") or ""
+        if (not SCRIPT_NAME_RE.match(name) or os.path.basename(name) != name
+                or name in (".", "..")):
+            probs.append(f"스크립트 이름 규칙 위반 — 저장 안 함: {name!r}")
+            continue
+        ext = os.path.splitext(name)[1].lower()
+        if ext not in SCRIPT_EXTS:
+            probs.append(f"스크립트 확장자 허용 밖 — 저장 안 함: {name}")
+            continue
+        path = os.path.join(cdir, name)
+        # 정규식 뒤 이중 방어 — 심링크 등으로 케이스 폴더 밖을 가리키면 쓰지 않는다.
+        if os.path.dirname(os.path.realpath(path)) != os.path.realpath(cdir):
+            probs.append(f"케이스 폴더 밖을 가리킴 — 저장 안 함: {name}")
+            continue
+        if os.path.isfile(path):
+            try:
+                with open(path, encoding="utf-8-sig") as fh:
+                    if content_hash(fh.read()) == content_hash(body):
+                        skipped += 1  # 무변경 — no-op(멱등)
+                        continue
+            except (OSError, UnicodeDecodeError):
+                pass  # 로컬본을 못 읽으면 서버본으로 덮는다(pull = 서버 진실 실체화)
+        with open(path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(body)
+        if os.name == "posix" and ext in (".sh", ".py"):
+            os.chmod(path, 0o755)  # 받고 나서 바로 실행 가능해야 한다(스펙 §3)
+        written += 1
+    return written, skipped, probs
+
+
 def cmd_pull(cfg, root, business_arg, host_filter):
     business_id = cfg.resolve_business_id(business_arg)
     my_user = cfg.whoami_user()
@@ -398,6 +552,7 @@ def cmd_pull(cfg, root, business_arg, host_filter):
     out = cfg.get("/api/cases/pull", params=params)
 
     written = skipped = 0
+    sc_written = sc_skipped = bad = 0
     for item in out.get("items", []):
         host, feature, name = item.get("host"), item.get("feature"), item.get("name")
         if not (host and feature and name):
@@ -412,19 +567,32 @@ def cmd_pull(cfg, root, business_arg, host_filter):
         # 서버 visibility 컬럼을 frontmatter 에 병합(#563 P1) — 웹 전환은 컬럼만 바꾸고
         # blob 은 push 원문이라, 병합 없이는 본문 hash 동일 = skip 으로 전환이 영영 안 내려온다.
         body = apply_server_visibility(item.get("body") or "", item.get("visibility"))
+        unchanged = False
         if os.path.exists(path):
             with open(path, encoding="utf-8-sig") as fh:
-                if content_hash(fh.read()) == content_hash(body):
-                    skipped += 1  # 무변경 — no-op(멱등)
-                    continue
-        with open(path, "w", encoding="utf-8") as fh:  # pull=서버 진실 실체화
-            fh.write(body)
-        written += 1
+                unchanged = content_hash(fh.read()) == content_hash(body)
+        if unchanged:
+            skipped += 1  # 무변경 — no-op(멱등)
+        else:
+            with open(path, "w", encoding="utf-8") as fh:  # pull=서버 진실 실체화
+                fh.write(body)
+            written += 1
+        # 스크립트 낙하는 case.md 변경 여부와 **무관**하게 돈다 — 무변경 케이스에서
+        # 건너뛰면 본문이 안 바뀐 케이스는 스크립트를 영영 못 받는다(조용한 실패).
+        sw, ss, probs = _write_scripts(cdir, item.get("scripts"))
+        sc_written += sw
+        sc_skipped += ss
+        for p in probs:
+            print(f"[pull] {host}/{feature}/{name}: {p}", file=sys.stderr)
+            bad += 1
 
     regenerate_index(root)
     print(f"[pull] business_id={business_id}" + (f" host={host_filter}" if host_filter else "") + f" → {root}")
-    print(f"[pull] 파일 written={written} skipped={skipped} · INDEX.md 재생성 완료")
-    return 0
+    print(f"[pull] 파일 written={written} skipped={skipped} · "
+          f"스크립트 written={sc_written} skipped={sc_skipped} · INDEX.md 재생성 완료")
+    if bad:
+        print(f"[pull] 규약 위반으로 저장하지 않은 스크립트 {bad}건 — 위 목록 확인", file=sys.stderr)
+    return 1 if bad else 0
 
 
 # ─────────────────────────── INDEX.md ───────────────────────────
@@ -515,6 +683,11 @@ def cmd_selftest():
             fh.write(text)
     put("localhost-5151/forge/chat-send/case.md", sample)
     put("localhost-5151/forge/chat-send/shots/01.png", "png")
+    # 스크립트 픽스처 — 최상위만 수집(shots/·diagnostics/ 하위는 구조적으로 제외).
+    put("localhost-5151/forge/chat-send/scan-formdef.js", "console.log(1)\n")
+    put("localhost-5151/forge/chat-send/helper.ps1", "Write-Host 1\r\nWrite-Host 2\r\n")
+    put("localhost-5151/forge/chat-send/notes.md", "스크립트 아님\n")
+    put("localhost-5151/forge/chat-send/diagnostics/deep.js", "not collected\n")
     bad = sample.replace("name: chat-send", "name: wrong-slug")
     put("localhost-5151/forge/bad-case/case.md", bad)
     put("_public/alice/localhost-5151/forge/their-case/case.md",
@@ -524,6 +697,70 @@ def cmd_selftest():
     check(len(errors) == 1 and "bad-case" in errors[0], "키 불일치 검출")
     check(all("_public" not in v["host"] for v in valid), "_public push 제외")
     check(valid[0]["task_id"] == 42, "task_id 정수 변환")
+    check("scripts" not in valid[0], "기본 스캔은 스크립트를 안 읽는다(INDEX 재생성용)")
+
+    # 3-1) 스크립트 수집(push 경로) — 최상위만, 하위 폴더·비대상 확장자 제외
+    vs, es = scan_local_cases(root, with_scripts=True)
+    names = [s["name"] for s in vs[0]["scripts"]]
+    check(names == ["helper.ps1", "scan-formdef.js"], "최상위 스크립트만 수집(정렬)")
+    check(all("deep.js" != n and "01.png" != n for n in names), "하위 폴더 제외")
+    check("notes.md" not in names, "스크립트 확장자 아닌 최상위 파일 제외")
+    ps1 = [s for s in vs[0]["scripts"] if s["name"] == "helper.ps1"][0]
+    check("\r" not in ps1["body"], "윈도우 CRLF 정규화(매 push 해시 뒤집힘 방지)")
+    check(len(es) == 1, "스크립트 수집이 기존 오류 카운트를 흔들지 않음")
+
+    # 3-2) 스크립트 규약 위반 — 이름·개수·용량(별도 폴더라 위 카운트에 영향 없음)
+    sdir = tempfile.mkdtemp(prefix="casescripts-")
+    with open(os.path.join(sdir, "a" * 62 + ".js"), "w", encoding="utf-8") as fh:
+        fh.write("x")
+    _, p1 = collect_scripts(sdir)
+    check(any("이름 규칙" in p for p in p1), "이름 64자 초과 거부")
+    shutil.rmtree(sdir, ignore_errors=True)
+    sdir = tempfile.mkdtemp(prefix="casescripts-")
+    for i in range(SCRIPT_MAX_FILES + 1):
+        with open(os.path.join(sdir, f"s{i}.js"), "w", encoding="utf-8") as fh:
+            fh.write("x")
+    _, p2 = collect_scripts(sdir)
+    check(any("최대 10개" in p for p in p2), "개수 한도 초과 거부")
+    shutil.rmtree(sdir, ignore_errors=True)
+    sdir = tempfile.mkdtemp(prefix="casescripts-")
+    with open(os.path.join(sdir, "big.js"), "w", encoding="utf-8") as fh:
+        fh.write("x" * (SCRIPT_MAX_BYTES + 1))
+    _, p3 = collect_scripts(sdir)
+    check(any("총합" in p for p in p3), "용량 한도 초과 거부")
+    shutil.rmtree(sdir, ignore_errors=True)
+
+    # 3-3) 청크 — 건수·바이트 중 먼저 닿는 쪽에서 끊는다
+    small = [{"name": f"c{i}", "body": "x"} for i in range(5)]
+    check(len(list(_chunks(small, 2))) == 3, "청크: 건수로 분할")
+    heavy = [{"name": f"c{i}", "body": "x" * 400_000} for i in range(4)]
+    # 건수(50)로만 나누면 1청크 1.6MB → 413. 바이트 예산이 2청크로 끊는다.
+    check(len(list(_chunks(heavy, 50))) == 2, "청크: 바이트 예산으로 분할")
+    check(sum(len(p) for p in _chunks(heavy, 50)) == 4, "청크: 항목 유실 없음")
+    huge = [{"name": "big", "body": "x" * (PUSH_MAX_BYTES + 10)}]
+    check(len(list(_chunks(huge, 50))) == 1, "청크: 예산 초과 1건도 잘라내지 않고 단독 전송")
+
+    # 3-4) pull 낙하(_write_scripts) — 이름 재검증·멱등·삭제 안 함
+    wdir = tempfile.mkdtemp(prefix="casewrite-")
+    w, s, probs = _write_scripts(wdir, [{"name": "run.js", "body": "a\n"}])
+    check((w, s, probs) == (1, 0, []), "스크립트 낙하: 신규 1건")
+    w2, s2, _ = _write_scripts(wdir, [{"name": "run.js", "body": "a\n"}])
+    check((w2, s2) == (0, 1), "스크립트 낙하: 무변경 skip(멱등)")
+    _, _, bad_probs = _write_scripts(wdir, [
+        {"name": "../escape.js", "body": "x"},
+        {"name": "sub/dir.js", "body": "x"},
+        {"name": "run.exe", "body": "x"},
+    ])
+    check(len(bad_probs) == 3, "스크립트 낙하: 이름·확장자 위반 3건 거부")
+    check(not os.path.exists(os.path.join(os.path.dirname(wdir), "escape.js")),
+          "스크립트 낙하: 상위 경로에 쓰지 않음")
+    _write_scripts(wdir, [{"name": "keep.sh", "body": "echo 1\n"}])
+    if os.name == "posix":
+        check(os.access(os.path.join(wdir, "keep.sh"), os.X_OK), "스크립트 낙하: 실행 권한")
+    _write_scripts(wdir, [{"name": "run.js", "body": "a\n"}])
+    check(os.path.isfile(os.path.join(wdir, "keep.sh")),
+          "스크립트 낙하: 서버에 없는 로컬 파일을 지우지 않음")
+    shutil.rmtree(wdir, ignore_errors=True)
 
     # 4) pull 소유 분리 + 멱등 + 인덱스
     check(_item_is_mine({"mine": True}, "me") is True, "mine 필드 우선")
