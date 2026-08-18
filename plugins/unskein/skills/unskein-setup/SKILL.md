@@ -219,7 +219,9 @@ TESTER 가 집는 범위는 **그 토큰 사용자의 멤버십**으로 정해�
   tester.ps1     # $env:UNSKEIN_API_BASE / UNSKEIN_MORI_TOKEN(kind=tester) / UNSKEIN_WATCH_BUSINESS / UNSKEIN_WATCH_PROJECT / UNSKEIN_BUSINESS_ID / CDP_PORT / CDP_PROFILE
                  #   + 담당 단계 스킬이 요구하는 값(T3 — 스킬의 `입력` 절이 단일 출처. 예: frame9 검수의 FRAME9_*)
   PROJECT.md     # 프로젝트 오리엔테이션 — 이 config 프로젝트의 서버 설명(R0-4 규약과 같은 형식·멱등)
-  cdp\           # 이 config 의 포트↔프로필 페어링 기록(pairing.txt). 프로필 실체는 start.ps1 표준 위치 %USERPROFILE%\.cdp-chrome-<CDP_PROFILE>
+  cdp\           # 이 config 의 포트↔프로필 배정표(pairing.txt) — 사람 메모가 아니라 **기계가 읽는 파일**이다.
+                 #   pairing.ps1 이 모든 번들의 이 파일을 훑어 빈 포트를 계산하고 중복을 진단한다(아래 배정 단계).
+                 #   프로필 실체는 start.ps1 표준 위치 %USERPROFILE%\.cdp-chrome-<CDP_PROFILE>
   cases\         # 검증 산출물(케이스 본문·재사용 스크립트·캡처·raw 진단)이 만들어지는 자리.
                  #   여기서 끝나지 않고 **셋으로 나뉘어 서버로 올라간다** — 케이스 본문·최상위
                  #   스크립트는 케이스 저장소(case-sync.py push), shots\·diagnostics\ 는 그 작업의
@@ -233,7 +235,29 @@ TESTER 가 집는 범위는 **그 토큰 사용자의 멤버십**으로 정해�
   Copy-Item "$env:CLAUDE_PLUGIN_ROOT\templates\tester.ps1.sample" "$env:USERPROFILE\.unskein\<business>__<project>\tester.ps1"
   ```
 - **PROJECT.md 생성**: whoami 응답(R0-2)의 이 프로젝트 `description` 을 번들 루트 `…\<business>__<project>\PROJECT.md` 에 R0-4 형식으로 저장한다(멱등 — 재실행 시 서버 값으로 갱신, 설명이 비어 있으면 R0-4 의 "설명 없음" 규칙 그대로).
-- **포트↔프로필 1:1 배정(충돌 금지)**: config 마다 **서로 다른 `CDP_PORT`**(9222, 9223, …)와 **서로 다른 프로필**(`CDP_PROFILE=<business>__<project>`)을 배정한다 — 인증(쿠키·JWT) 경계는 탭이 아니라 **프로필**이라, 안 나누면 로그인이 섞인다(`unskein-test` §3). `tester.ps1` 에 `$env:CDP_PORT` 를 박아두면 `remote.js` 명령마다 `--port` 를 안 붙여도 된다. 배정을 `cdp\pairing.txt` 에 한 줄로 남겨 다음 config 와 겹치지 않게 한다.
+- **`UNSKEIN_BUSINESS_ID` 를 같은 응답에서 채운다 — 사람에게 묻지 않는다**: whoami 응답의 `businesses[].id` 가 그 번호다(플러그인 v1.53.0+ · 서버가 이 필드를 실은 뒤). 빈 채로 두면 케이스가 조용히 안 쌓이는 사고가 나므로(§T3) 번들을 만들 때 여기서 확정한다:
+  ```powershell
+  # tester 토큰으로 조회 — 헤더는 역할 중립 X-Unskein-Token (R0-2 와 같은 라우트)
+  $r = curl.exe -s "$env:UNSKEIN_API_BASE/api/whoami" -H "X-Unskein-Token: $env:UNSKEIN_MORI_TOKEN" | ConvertFrom-Json
+  $r.businesses | ForEach-Object {
+    "$($_.id)  $($_.name)"
+    $_.projects | ForEach-Object { "        $($_.id)  $($_.name)   process=$($_.default_process_key)   tester=$($_.tester_skills -join ',')" }
+  }
+  ```
+  이 번들이 담당할 비즈니스의 `id` 를 `tester.ps1` 의 `$env:UNSKEIN_BUSINESS_ID` 에 적는다(**이름 아님 — 숫자**). 응답에 `id` 가 없으면 구서버이니 "서버 업데이트 필요"로 알리고 번호를 사람에게 물어 채운다 — **필드 부재를 이유로 셋업을 중단하지 않는다**(못 채우는 것뿐이고, 클라이언트가 보낸 좁히기를 서버가 무시하는 에코-중단 규약과는 성격이 다르다. R0-2 `description` 선례와 같은 처리).
+- **포트↔프로필 1:1 배정(충돌 금지) — 고르지 말고 계산해서 받는다**: config 마다 **서로 다른 `CDP_PORT`**(9222, 9223, …)와 **서로 다른 프로필**(`CDP_PROFILE=<business>__<project>`)을 쓴다. 인증(쿠키·JWT) 경계는 탭이 아니라 **프로필**이라, 안 나누면 로그인이 섞인다(`unskein-test` §3). 겹치면 그 자리에서 안 드러나고 나중에 `start.ps1` 이 기동을 거부하면서 나타나므로, 사람이 기억으로 고르지 않는다:
+  ```powershell
+  $PAIR = "$env:CLAUDE_PLUGIN_ROOT\skills\unskein-test\scripts\pairing.ps1"
+  powershell.exe -ExecutionPolicy Bypass -File $PAIR -Action list      # 지금 어느 번들이 어느 포트를 쓰나
+  $port = powershell.exe -ExecutionPolicy Bypass -File $PAIR -Action next   # 빈 포트 하나 받기(기본 9222부터)
+  powershell.exe -ExecutionPolicy Bypass -File $PAIR -Action record -Bundle <business>__<project> -Port $port
+  ```
+  `next` 는 **모든 번들**의 `cdp\pairing.txt` 와 `tester.ps1` 의 `$env:CDP_PORT` 를 함께 읽어(기록만 보면 사람이 `tester.ps1` 만 고친 경우를 놓친다) 안 쓰는 첫 포트를 낸다. `record` 는 다른 번들이 이미 쓰는 포트면 기록을 거부한다. 받은 값을 `tester.ps1` 의 `$env:CDP_PORT`·`$env:CDP_PROFILE` 에도 그대로 적는다 — **실제 동작에 쓰이는 값은 `tester.ps1` 쪽**이고(`remote.js` 가 읽는다) `pairing.txt` 는 배정 근거다. 둘이 어긋나면 `-Action check` 가 경고로 알린다.
+- **배정표(`cdp\pairing.txt`) 형식** — 파일당 한 줄, `#` 뒤는 주석, 빈 줄 허용:
+  ```
+  CDP_PORT=9223 CDP_PROFILE=EMAX__FRAMEWEB_ERP  # 이 번들 전용 1:1 배정 — 다른 config 와 공유 금지
+  ```
+  쓰기는 `record` 가 **BOM 없는 UTF-8** 로 한다(Windows PowerShell 5.1 의 `Out-File -Encoding utf8` 은 BOM 을 붙이고 `-Encoding utf8NoBOM` 은 PowerShell 6+ 전용이라, 5.1 을 포함해 안전한 건 `[IO.File]::WriteAllText` 뿐이다 — 이 저장소의 `.ps1` 은 항상 `powershell.exe`=5.1 로 부른다). 읽기는 BOM 이 붙어 있어도 받아준다(사람이 메모장으로 고치는 파일이라 — 케이스 파일과 같은 방침). 예전 호스트에 남아 있는 `9223 <-> 이름`·`9223 이름` 표기도 읽는다.
 
 > 경로 1 이면 T1 을 건너뛴다 — 번들 없이 단일 `tester.ps1`(WATCH 빈 값) 하나면 된다.
 
@@ -249,7 +273,10 @@ TESTER 가 집는 범위는 **그 토큰 사용자의 멤버십**으로 정해�
 
 **채우는 값의 단일 출처는 그 스킬의 `입력` 절이다.** 이 절에 값 목록을 베껴 두지 않는다 — 담당 스킬이 바뀌면 값도 바뀌므로 그때마다 스킬 문서를 연다.
 
-1. 이 번들이 담당할 프로세스의 **AI 단계 스킬을 확인**한다 — 정의 화면 그 단계 칸의 `skill_key`, 또는 `node queue.js claim` 응답의 `stage.skill`.
+1. 이 번들이 담당할 프로세스의 **AI 단계 스킬을 확인**한다 — 위 §T1 의 whoami 조회에서 그 프로젝트의 `tester_skills` 가 곧 그 목록이다(플러그인 v1.53.0+). 정의 화면을 열지 않고 단말에서 확인된다. 안 되면 종전대로 정의 화면 그 단계 칸의 `skill_key`, 또는 `node queue.js claim` 응답의 `stage.skill`.
+   - `tester_skills` 는 **이름만** 나온다(스킬 본문은 안 실린다 — 능력 신고와 같은 주입 경계). 이름으로 그 SKILL.md 를 찾아 2번으로 간다.
+   - **빈 목록이 곧 "없음"은 아니다**: 프로세스가 아직 안 붙었거나(`default_process_key` 가 비었거나) dev 프로세스면 서버가 빈 목록을 준다(실측 — `process=None` 인 프로젝트는 전부 `[]`). 이 번들이 실제로 검증을 담당하는데 비어 있으면 프로세스 연결부터 확인한다.
+   - **카드 하나를 콕 집어 지목한 스킬(템플릿형)은 여기 안 담긴다** — 그 값의 단일 출처는 claim 응답이다. 프로젝트의 기본 담당을 아는 용도로 쓴다.
 2. 그 스킬 SKILL.md 의 **`입력` 절**을 열어 요구 환경값을 읽는다.
 3. `tester.ps1` 의 "이 번들이 담당할 단계 스킬이 요구하는 값" 구획에 `$env:` 로 채운다(템플릿에 자리와 예시가 있다).
 4. 값을 몰라 못 채우면 **거기서 멈추고 묻는다** — 빈 값으로 돌리면 검증이 절차 1에서 QUESTION 으로 되돌아올 뿐이다(fallback 금지).
@@ -263,7 +290,7 @@ TESTER 가 집는 범위는 **그 토큰 사용자의 멤버십**으로 정해�
 | `FRAME9_BIS_ID` | 이관 작업공간 키(frmcmp-tree 조회 필터 · 프리뷰 활성 비즈니스 대조) | 절차 1 QUESTION |
 | `UNSKEIN_BUSINESS_ID` | 케이스 동기용 비즈니스 **번호(숫자 id)**. 이름은 안 된다 — 이름→id 해석은 planner 토큰 전용이라 tester 토큰이 이름을 주면 401 로 멈춘다 | 케이스 동기만 미실행(검증은 진행 — 리포트에 명시) |
 
-**⚠️ `UNSKEIN_BUSINESS_ID` 는 비면 조용히 묻힌다 — 셋업 때 반드시 채운다.** 검증 자체는 정상으로 돌고 카드도 전진하므로 **화면에는 아무 이상이 없어 보인다.** 2026-07-29 실측에서 이 값이 비어 있어 **12일 동안 케이스가 한 건도 안 올라갔는데 아무도 몰랐다** — 사유는 카드의 검증 결과에 정확히 적혀 있었지만 보는 자리가 없어 묻혔다. 값을 모르면 빈 채로 진행하지 말고 **여기서 멈추고 번호를 확인한다**(웹에서 그 비즈니스를 연 주소, 또는 플래너). 이미 돌고 있는 번들에서 이 증상이 의심되면 `unskein-doctor` 11번 갈래로 카드·서버 로그·env 를 순서대로 본다.
+**⚠️ `UNSKEIN_BUSINESS_ID` 는 비면 조용히 묻힌다 — 셋업 때 반드시 채운다.** 검증 자체는 정상으로 돌고 카드도 전진하므로 **화면에는 아무 이상이 없어 보인다.** 2026-07-29 실측에서 이 값이 비어 있어 **12일 동안 케이스가 한 건도 안 올라갔는데 아무도 몰랐다** — 사유는 카드의 검증 결과에 정확히 적혀 있었지만 보는 자리가 없어 묻혔다. 값을 모르면 빈 채로 진행하지 말고 **여기서 멈추고 번호를 확인한다** — 셋업이 §T1 에서 whoami 의 `businesses[].id` 로 채우는 게 표준이고(v1.53.0+), 그게 안 되면 웹에서 그 비즈니스를 연 주소나 플래너에게 확인한다. 이미 돌고 있는 번들에서 이 증상이 의심되면 `unskein-doctor` 11번 갈래로 카드·서버 로그·env 를 순서대로 본다.
 
 **CDP 프로필 로그인도 전제다** — 프리뷰 화면은 developer 등급 로그인 + 활성 비즈니스 = `FRAME9_BIS_ID` 를 요구한다. 프로필에 그 로그인이 없거나 만료면 401 로 튕겨 검증 불능이다. T4 에서 `start.ps1` 로 프로필을 띄운 뒤 한 번 로그인해 둔다(프로필에 남는다).
 
