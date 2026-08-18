@@ -32,6 +32,8 @@ $env:UNSKEIN_WATCH_PROJECT  = "UNSKEIN_SAAS"
 
 # ── 케이스 동기용 비즈니스 id ── ⚠️ 비워 두면 케이스가 조용히 안 쌓인다
 # 이름이 아니라 **id**(숫자)다 — 이름→id 해석은 planner 토큰 전용이라 tester 는 id 를 직접 둔다.
+#   (이 값이 비면 case-sync 가 UNSKEIN_WATCH_BUSINESS 이름으로 폴백해 GET /api/businesses 를 부르는데,
+#    tester 토큰에는 그 라우트가 401 이라 종료코드 1 로 멈춘다 — 조용히 넘어가지는 않는다.)
 # 얻는 법: 웹에서 그 비즈니스를 연 주소의 id, 또는 플래너에게 확인. 미설정이면 케이스 pull/push 가
 # 명확히 멈춘다(검증 자체는 진행 — 리포트에 "케이스 동기 미실행" 명시. unskein-test §0.2).
 # 그래서 **화면에는 이상이 없어 보인다** — 검증은 돌고 카드도 전진한다. 2026-07-29 실측에서
@@ -41,7 +43,15 @@ $env:UNSKEIN_BUSINESS_ID = ""
 # ── CDP 포트↔프로필 페어링 (병렬 격리 = 경로 2 필수) ──
 # 인증(쿠키·localStorage·JWT) 경계는 **프로필**이다(unskein-test §3). config 마다 다른 포트+다른 프로필을 1:1 로.
 #   기동:  start.ps1 -Port $env:CDP_PORT -Profile $env:CDP_PROFILE
-#   (프로필 실체는 start.ps1 표준 위치 %USERPROFILE%\.cdp-chrome-<CDP_PROFILE>. 이 번들 cdp\pairing.txt 에 배정 기록.)
+#   (프로필 실체는 start.ps1 표준 위치 %USERPROFILE%\.cdp-chrome-<CDP_PROFILE>.)
+# 포트는 손으로 고르지 않는다 — pairing.ps1 이 모든 번들을 훑어 빈 포트를 준다(unskein-setup §T1):
+#   $PAIR = "$env:CLAUDE_PLUGIN_ROOT\skills\unskein-test\scripts\pairing.ps1"
+#   powershell.exe -ExecutionPolicy Bypass -File $PAIR -Action next                      # 빈 포트 받기
+#   powershell.exe -ExecutionPolicy Bypass -File $PAIR -Action record -Bundle <business>__<project> -Port <받은포트>
+# 그러면 이 번들 cdp\pairing.txt 에 배정이 한 줄로 기록된다(BOM 없는 UTF-8, 파일당 한 줄, '#' 뒤는 주석):
+#   CDP_PORT=<포트> CDP_PROFILE=<business>__<project>  # 이 번들 전용 1:1 배정 — 다른 config 와 공유 금지
+# 받은 값을 아래 두 줄에도 그대로 적는다 — **실제 동작에 쓰이는 값은 여기**이고 pairing.txt 는 배정 근거다.
+#   둘이 어긋나면 `-Action check`(unskein-doctor 8번)가 경고로 알린다.
 # CDP_PORT 는 remote.js 가 읽는다(명령마다 --port 생략 가능). CDP_PROFILE 은 start.ps1 -Profile 인자로 넘기는 번들 관례.
 $env:CDP_PORT    = "9222"                        # config 마다 9222, 9223, … 유일하게(공유 금지)
 $env:CDP_PROFILE = "MUPAISTUDIO__UNSKEIN_SAAS"   # 보통 <business>__<project>

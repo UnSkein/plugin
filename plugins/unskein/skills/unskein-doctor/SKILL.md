@@ -55,7 +55,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/orchestrator/status.py"
 | # | 증상(어디서 멈추나) | 원인 후보 | 복구 액션 |
 |---|------|------|------|
 | 1 | `claude` 또는 `git` 을 못 찾음 | WSL에 실행 파일 부재 | `unskein-setup` S1로 설치 안내 |
-| 2 | claim 단계에서 멈춤(`HTTP 401`) / 토큰 인증 실패 | `UNSKEIN_API`·`UNSKEIN_MORI_TOKEN` 미설정 또는 무효 | `unskein-setup` 로 연결 정보 재설정 |
+| 2 | claim 단계에서 멈춤(`HTTP 401`) / 토큰 인증 실패 | `UNSKEIN_API`·`UNSKEIN_MORI_TOKEN` 미설정 또는 무효 | `unskein-setup` 로 연결 정보 재설정 — 단 `[경로]` 줄이 프로젝트로 맞고 그 홈에 `executor.env` 가 있으면 13번 |
 | 3 | claim은 되는데 clone·push 에서 실패 | git 자격증명(HTTPS 토큰/SSH 키) 누락·만료 | `unskein-setup` 로 자격증명 재배치·교체 |
 | 4 | 작업 루트 생성/쓰기 실패(preflight `작업 루트(work)` `[실패]`) | `UNSKEIN_WORK_ROOT` 쓰기 권한 부족 (부재는 preflight 가 자동 생성) | 권한 보정 |
 | 5 | "다오 스킬 원본을 찾을 수 없습니다" 로 회수됨 | dao-skills 원본 누락(plugin 설치·갱신 문제) | `/plugin` 재설치 |
@@ -66,6 +66,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/orchestrator/status.py"
 | 10 | 작업을 하나도 못 잡고 preflight 가 `[실패] gh CLI 인증(PR 생성)` 으로 종료(claim 안 함) | gh 미설치·미인증·토큰 무효 | 아래 10번 — `unskein-setup` S1 로 `gh auth login` + `gh auth setup-git` |
 | 11 | 화면검증은 도는데 **케이스가 안 쌓인다**(케이스 목록이 며칠째 그대로) | `UNSKEIN_BUSINESS_ID` 미설정 또는 이름을 넣음 / 케이스 동기 명령 미실행 / 토큰·서버 문제 | 아래 11번 — 비즈니스 **번호**를 넣고 재push |
 | 12 | 검증 결과에 **첨부(캡처·raw)가 없다**, 리포트에 "증거 업로드 미실행(사유)" | 업로드 명령 미실행 / 한도·이름 규칙 위반(413·409·422) / 캡처를 케이스 폴더로 안 옮김 | 아래 12번 |
+| 13 | `/unskein:status` 의 `[경로]` 줄은 프로젝트 경로로 맞는데 `UNSKEIN_API` 는 `(미설정 — 기본값 사용)`, `UNSKEIN_MORI_TOKEN` 은 `없음`, watch 대상은 `미지정` / `/unskein:run`·`/unskein:watch` 는 claim 전에 `UNSKEIN_MORI_TOKEN 환경변수가 필요합니다` 로 종료(401 아님) | `UNSKEIN_HOME` 만 export 하고 `executor.env` 를 `source` 안 함 — 실행기 로더엔 `$UNSKEIN_HOME/executor.env` 분기가 없음(플래너와 다른 지점) | 아래 13번 — 그 `executor.env` 를 명시 `source` 한 새 셸에서 재기동 |
 
 각 갈래의 진단·복구 절차는 아래와 같습니다.
 
@@ -83,7 +84,7 @@ command -v claude; command -v git
 
 ### 2. 연결 정보 미설정/무효 (claim 401)
 
-진단: 스냅샷의 `UNSKEIN_MORI_TOKEN` 이 `없음` 이면 미설정입니다. `설정됨` 인데도 `/unskein:run` 이 `[http error] 401` 로 멈추면 토큰이 무효(잘못된 값/만료/해지)입니다. claim 은 토큰을 헤더로 보내 인증하므로, 무효 토큰은 401 로 표시됩니다.
+진단: 스냅샷의 `UNSKEIN_MORI_TOKEN` 이 `없음` 이면 미설정입니다. 단 `없음` 이라도 `[경로]` 줄이 프로젝트 경로로 맞고 그 홈에 `executor.env` 가 있으면 **값이 셸에 안 실린 것**이니 13번 갈래로 갑니다(그쪽은 401 이 아니라 claim 전에 멈춥니다). `설정됨` 인데도 `/unskein:run` 이 `[http error] 401` 로 멈추면 토큰이 무효(잘못된 값/만료/해지)입니다. claim 은 토큰을 헤더로 보내 인증하므로, 무효 토큰은 401 로 표시됩니다.
 
 복구: `unskein-setup` S1로 `UNSKEIN_API`·`UNSKEIN_MORI_TOKEN` 을 다시 설정합니다. 토큰은 UnSkein 설정 화면에서 다시 발급합니다. 토큰 값은 화면에 출력하지 않습니다. 값이 빠지면 임의로 채우지 말고 사용자에게 물어 멈춥니다.
 
@@ -98,7 +99,7 @@ command -v claude; command -v git
 
 프로젝트 격리(`UNSKEIN_HOME`) 배치에서 preflight 의 `상태 루트 정합(UNSKEIN_HOME)` 줄이 `[실패]` 면 **상태 분산**입니다 — 전역 셸에 남은 개별 변수(`UNSKEIN_CRED_DIR`/`UNSKEIN_WORK_ROOT`, 보통 bashrc 의 전역 env 자동 로드 잔재)가 creds/work 를 프로젝트 홈 밖으로 끌고 간 것. 복구는 그 변수(또는 bashrc 자동 로드 줄)를 제거하고 프로젝트 env 만 다시 `source` 합니다. 같은 잔재 중 SSH 키 경로(`UNSKEIN_SSH_KEY`/`UNSKEIN_SSH_KNOWN_HOSTS`)는 `SSH 자격 경로` 줄에 `[경고]` 로 뜹니다 — 의도한 외부 키(`~/.ssh` 등)가 아니면 같은 방법으로 정리합니다(방치하면 다른 프로젝트의 SSH 신원으로 조용히 clone/push 하는 누출).
 
-프로젝트 격리 배치에서 preflight 의 `[경로] 전역 ~/.unskein 도 존재` 줄은 — 활성 홈과 다른 전역 `~/.unskein` 이 이 머신에 있다는 **상황 안내**입니다(경고 아님, 차단도 아님). 이 전역은 **다른 역할(TESTER 등)·기존 설치의 상태 홈**입니다. 명시 `source`(또는 `UNSKEIN_HOME` 지정)로 붙었으면 cwd 폴백이 꺼져 전역은 이 세션에 관여하지 않습니다. 조치: 이 머신에서 그 역할(예: TESTER)을 운영하지 않으면 전역은 불필요한 잔재이니 **정리해도 됩니다**(`mv ~/.unskein ~/.unskein_back` — 개명이라 되돌리기 가능); 운영 중이면 그대로 둡니다. **격리 자체는 전역 삭제가 아니라 명시 source·`UNSKEIN_HOME` 로 합니다** — 지우지 않아도 명시 source 면 안전합니다. 정작 확인할 것은 **어느 파일에서 상태가 왔는지**입니다 — `[경로] env 파일(cwd 폴백 로드)`(실행기)·`UNSKEIN_PLANNER_ENV_FILE`(플래너) 줄로 봅니다. 그 줄이 떴다면 `source` 를 안 해 cwd 폴백으로 로드된 것이니, 의도한 프로젝트가 맞는지 확인하고 아니면 그 프로젝트 env 를 명시 `source` 합니다. 여러 실행기/플래너 중 하나가 엉뚱하게 붙으면 대개 **셸에 이전 프로젝트 토큰이 남아 있어**(source 우선이 그걸 이김) 그런 것이니 — **새 터미널**에서 다시 시작합니다.
+프로젝트 격리 배치에서 preflight 의 `[경로] 전역 ~/.unskein 도 존재` 줄은 — 활성 홈과 다른 전역 `~/.unskein` 이 이 머신에 있다는 **상황 안내**입니다(경고 아님, 차단도 아님). 이 전역은 **다른 역할(TESTER 등)·기존 설치의 상태 홈**입니다. 명시 `source` 로 붙었으면 cwd 폴백이 꺼져 전역은 이 세션에 관여하지 않습니다(폴백을 끄는 조건은 **셸에 모리 토큰이 있는 것 하나**입니다 — `UNSKEIN_HOME` 을 지정해도 폴백은 안 꺼지고, 그 홈의 `executor.env` 를 대신 읽어주지도 않습니다. 13번 갈래). 조치: 이 머신에서 그 역할(예: TESTER)을 운영하지 않으면 전역은 불필요한 잔재이니 **정리해도 됩니다**(`mv ~/.unskein ~/.unskein_back` — 개명이라 되돌리기 가능); 운영 중이면 그대로 둡니다. **격리 자체는 전역 삭제가 아니라 명시 source·`UNSKEIN_HOME` 로 합니다** — 지우지 않아도 명시 source 면 안전합니다. 정작 확인할 것은 **어느 파일에서 상태가 왔는지**입니다 — `[경로] env 파일(cwd 폴백 로드)`(실행기)·`UNSKEIN_PLANNER_ENV_FILE`(플래너) 줄로 봅니다. 그 줄이 떴다면 `source` 를 안 해 cwd 폴백으로 로드된 것이니, 의도한 프로젝트가 맞는지 확인하고 아니면 그 프로젝트 env 를 명시 `source` 합니다. 여러 실행기/플래너 중 하나가 엉뚱하게 붙으면 대개 **셸에 이전 프로젝트 토큰이 남아 있어**(source 우선이 그걸 이김) 그런 것이니 — **새 터미널**에서 다시 시작합니다.
 
 복구: `unskein-setup` 의 자격증명 갱신 단계로 자격증명을 재배치하거나 교체합니다(토큰 재발급, 키 교체). 토큰·키 값은 화면에 출력하지 않고, 저장소 주소나 git 설정에 토큰을 넣지 않습니다. 토큰을 교체한 경우 옛 토큰을 발급처에서 폐기하도록 안내합니다.
 
@@ -158,13 +159,22 @@ curl -s "${UNSKEIN_API:-https://unskein.mupai.studio}/api/health"
 
 ### 8. 화면 검증이 CDP Chrome(기본 9222)에 안 붙음
 
-화면 런타임 검증은 `unskein-test` 스킬이 담당합니다. 그 검증이 "CDP 연결 실패" 로 멈추면 세 가지를 봅니다.
+화면 런타임 검증은 `unskein-test` 스킬이 담당합니다. 그 검증이 "CDP 연결 실패" 로 멈추면 네 가지를 봅니다.
 
 첫째, 가장 흔한 원인은 실행 위치입니다. `remote.js` 는 **윈도우 Node** 로, `start.ps1`/`stop.ps1` 은 **PowerShell** 로 호출해야 `127.0.0.1:<포트>` 가 윈도우 로컬을 가리킵니다. WSL 안의 Node 로 `remote.js` 를 실행하면 `127.0.0.1` 이 WSL 루프백이 되어 윈도우에 떠 있는 CDP Chrome 에 닿지 못합니다. 모리 운영 세션이 WSL 안에서 돌고 있다면 이 갈래를 먼저 의심합니다.
 
-둘째, **포트 불일치**(병렬 세션): `start.ps1 -Port <n>` 로 띄웠는데 `remote.js` 가 기본 9222 로 붙고 있으면 연결이 안 됩니다. 에러 메시지의 포트와 띄운 포트를 대조하고, `--port=<n>` 또는 `CDP_PORT=<n>` 로 맞춥니다(포트↔프로필 1:1 — `unskein-test` §3).
+둘째, **번들 사이 포트 배정이 겹쳤을 수 있습니다**(윈도우 호스트가 여러 프로젝트를 담당할 때). 포트↔프로필은 1:1 이라 두 번들이 같은 포트를 배정받으면 나중에 뜨는 쪽이 `start.ps1` 에서 거부되거나, 먼저 뜬 남의 프로필에 붙어 로그인이 섞입니다. 개별 증상을 따라가기 전에 배정부터 한 번에 봅니다(윈도우에서):
 
-셋째, Chrome 자체가 그 포트에 안 떠 있을 수 있습니다. 윈도우에서 기동 상태를 확인합니다(윈도우 PowerShell 에서):
+```powershell
+$PAIR = "$env:CLAUDE_PLUGIN_ROOT\skills\unskein-test\scripts\pairing.ps1"
+powershell.exe -ExecutionPolicy Bypass -File $PAIR -Action check
+```
+
+`[실패] 포트 <n> 를 여러 번들이 쓴다` 면 이 갈래입니다 — 한쪽 번들을 `-Action next` 로 빈 포트를 받아 옮기고(`-Action record` 로 기록), 그 번들 `tester.ps1` 의 `$env:CDP_PORT` 도 같은 값으로 맞춘 뒤 **새 창**에서 다시 dot-source 합니다. 포트를 옮겨도 프로필은 이름으로 잡히므로 재로그인은 필요 없습니다(그 프로필 Chrome 이 떠 있으면 `stop.ps1` 로 먼저 내립니다). `[경고] 기록과 실제가 다름` 은 `pairing.txt` 와 `tester.ps1` 의 포트가 어긋난 것이며, **동작에 쓰이는 값은 `tester.ps1` 쪽**입니다(`remote.js` 가 읽습니다) — `record` 로 기록을 맞춥니다.
+
+셋째, **포트 불일치**(병렬 세션): `start.ps1 -Port <n>` 로 띄웠는데 `remote.js` 가 기본 9222 로 붙고 있으면 연결이 안 됩니다. 에러 메시지의 포트와 띄운 포트를 대조하고, `--port=<n>` 또는 `CDP_PORT=<n>` 로 맞춥니다(포트↔프로필 1:1 — `unskein-test` §3).
+
+넷째, Chrome 자체가 그 포트에 안 떠 있을 수 있습니다. 윈도우에서 기동 상태를 확인합니다(윈도우 PowerShell 에서):
 
 ```shell
 powershell.exe -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/skills/unskein-test/scripts/start.ps1"
@@ -222,7 +232,7 @@ TESTER 갈래입니다. 화면검증은 정상으로 돌아 카드가 전진하�
 진단 — 세 자리를 순서대로 봅니다:
 
 1. **카드(가장 먼저)**: 그 검증 카드의 검증 결과(`task.payload['test']`)와 리포트 본문에 **"케이스 동기 미실행"** 표기가 있는지 봅니다. `unskein-test` §0.2 는 케이스 동기가 실패해도 검증 자체는 진행하되 사유를 남기게 합니다(#783 은 `payload['test'].cases_sync` 에 사유가 남았습니다). 표기가 있으면 **그 사유가 곧 원인**이라 아래 2·3 은 확인용입니다.
-2. **서버 로그**: `POST /api/cases/push` 호출이 아예 없으면 단말에서 명령이 시작 전에 멈춘 것(env 미설정)입니다. 호출은 있는데 4xx 로 끝나면 인증(401)·비즈니스 지정 문제입니다.
+2. **서버 로그**: `POST /api/cases/push` 호출은 있는데 4xx 로 끝나면 인증(401)·비즈니스 지정 문제입니다. push 호출이 아예 없으면 단말에서 명령이 그 전에 멈춘 것인데, **표준 번들이면 대개 `GET /api/businesses` 401 이 함께 남습니다** — `UNSKEIN_BUSINESS_ID` 가 비면 `UNSKEIN_WATCH_BUSINESS` 이름으로 폴백해 이름 해석을 시도하고, tester 토큰에는 그 라우트가 401 이라 거기서 종료코드 1 로 멈추기 때문입니다(`bin/case-sync.py` `resolve_business_id`). 그 401 이 보이면 3번(빈 `UNSKEIN_BUSINESS_ID`)이 확정입니다. 네 자리(인자·`UNSKEIN_BUSINESS_ID`·`UNSKEIN_BUSINESS`·`UNSKEIN_WATCH_BUSINESS`)가 **전부** 비었을 때만 아무 호출 없이 멈춥니다.
 3. **단말 env**: 그 TESTER 번들의 `UNSKEIN_BUSINESS_ID`. 값은 출력하지 않고 설정 여부만 봅니다.
 
 ```powershell
@@ -259,6 +269,50 @@ TESTER 갈래입니다. 검증 결과 상세에 "첨부 없음" 만 뜨거나, �
 
 재검증: `node queue.js artifacts <id> --dir=<케이스폴더>` 가 `ok:true` 로 끝나고 출력의 `artifacts` 목록에 파일이 보이는지, 이어서 웹 검증 결과 상세에서 캡처가 실제로 열리는지 확인합니다. 결함 옆 링크가 안 붙으면 `findings[].evidence` 의 파일명이 올린 이름과 어긋난 것입니다(`unskein-test` §0.3).
 
+### 13. 상태 경로는 맞는데 설정값이 안 실림 (`/unskein:run` 이 401 없이 "토큰 필요" 로 종료)
+
+`/unskein:status` 스냅샷에서 경로 줄은 프로젝트로 맞게 나오는데, 맨 위 설정 세 줄만 값이 안 실린 모양입니다:
+
+```
+[기본값] UNSKEIN_API: https://unskein.mupai.studio (미설정 — 기본값 사용)
+[없음] UNSKEIN_MORI_TOKEN: 없음 (unskein-setup 로 설정하세요)
+[전체] watch 대상: 미지정 (모든 비즈니스/프로젝트)
+  …
+  [경로] 상태 루트(UNSKEIN_HOME): /home/<user>/<프로젝트>/.unskein   ← 프로젝트 경로로 맞음
+  [경로] creds: …/.unskein/creds  /  work: …/.unskein/work
+  [OK] 상태 루트 정합(UNSKEIN_HOME)
+  …
+[건너뜀] watch 대상 검증: 토큰 없음 (unskein-setup 먼저)
+```
+
+이 셸에서 `/unskein:run`·`/unskein:watch` 는 claim 에 가기 전에 `UNSKEIN_MORI_TOKEN 환경변수가 필요합니다.` 한 줄만 찍고 끝납니다(토큰 확인이 preflight 보다 앞이라 preflight 출력도 안 나옵니다). **`HTTP 401` 이 아니므로 2번 갈래가 아닙니다** — 토큰이 무효인 게 아니라 실행기에 안 실린 것입니다. preflight 의 다른 항목이 `[실패]` 면 이 갈래와 무관하니 그 항목의 갈래로 따로 봅니다. `큐 서버 도달` 은 `UNSKEIN_API` 가 안 실린 채 **기본 서버**를 점검한 결과라, 다른 서버를 쓰는 프로젝트면 이 `[OK]` 가 그 서버를 뜻하지 않습니다.
+
+진단: 셸에 무엇이 실렸는지를 값 없이 존재만 봅니다.
+
+```shell
+echo "UNSKEIN_HOME=${UNSKEIN_HOME:-(없음)}"
+[ -n "$UNSKEIN_MORI_TOKEN" ] && echo "토큰 설정됨" || echo "토큰 없음"
+ls -l "${UNSKEIN_HOME:-$HOME/.unskein}/executor.env"
+```
+
+`UNSKEIN_HOME` 만 있고 토큰은 없는데 그 홈에 `executor.env` 파일은 있으면 이 갈래입니다. preflight 의 `[경로] env 파일(cwd 폴백 로드)` 줄은 **cwd 폴백이 파일을 읽었을 때만** 뜹니다 — 떠 있으면 아래 폴백 상태이고, 명시 `source` 로 붙은 정상 세션에도 없는 줄이라 줄 없음을 고장 신호로 읽지 않습니다.
+
+원인: 실행기 로더에는 `$UNSKEIN_HOME/executor.env` 를 읽는 분기가 없습니다. `run_once` 는 셸에 토큰이 있으면 그대로 두고, 없으면 cwd 에서 위로 올라가며 `<디렉토리>/.unskein/executor.env` 만 찾습니다 — `UNSKEIN_HOME` 은 이 탐색에 안 쓰이고, 로드가 끝난 뒤 creds·work·SSH 키 경로를 정하는 데만 씁니다. 그래서 `UNSKEIN_HOME` 만 export 하면 경로는 프로젝트로 맞게 잡히고 그 파일 안의 값은 하나도 안 실립니다. 프로젝트 폴더 밖에서 `claude` 를 띄웠고 그 위쪽 어디에도 `.unskein/executor.env` 가 없으면 cwd 폴백도 안 걸립니다(조상에 전역 `~/.unskein/executor.env` 가 있으면 폴백이 그걸 주워 설정 줄이 **전역 값으로** 채워지므로 이 모양이 아닙니다). **플래너와 다른 지점입니다** — `bin/planner-env.sh` 는 `$UNSKEIN_HOME/planner.env` 를 cwd 폴백보다 먼저 읽습니다(`플래너설치.md` 서두 ①~④, ADR-0020 · ADR-0021).
+
+복구: `unskein-setup` 재실행이 아닙니다 — 값은 이미 `executor.env` 에 있고 셸에 안 실렸을 뿐입니다. 그 파일을 명시 `source` 한 **새 셸**에서 다시 띄웁니다:
+
+```shell
+cd /home/<user>/<프로젝트>        # UNSKEIN_HOME 의 부모
+source ./.unskein/executor.env
+claude
+```
+
+파일의 각 줄이 `export` 로 시작하는지도 봅니다 — `export` 없는 `KEY=VALUE` 는 셸 변수로만 남아 실행기에 상속되지 않습니다(`executor.env.sample` 머리말). 그 홈에 `executor.env` 자체가 없거나 토큰 줄이 비어 있으면 그때는 2번 갈래입니다. 토큰 값은 화면에 출력하지 않고, 빠졌으면 임의로 채우지 말고 사용자에게 묻고 멈춥니다.
+
+cwd 폴백(그 `.unskein` 아래에서 그냥 띄우기)으로 대신하지 않습니다. **폴백이 파일을 읽어도 `/unskein:run`·`/unskein:watch` 의 토큰 확인에는 반영되지 않아 같은 문구로 멈춥니다**(plugin v1.52.0 실측) — 스냅샷의 설정 줄만 채워져 "status 는 설정됨인데 run 만 토큰 없음" 으로 어긋나 보입니다. 실행기에 값을 싣는 경로는 **셸 환경**뿐이고, 프로젝트 격리 배치에서 그 셸은 명시 `source` 로 만듭니다.
+
+재검증: 위에서 새로 띄운 세션에서 `/unskein:status` 를 다시 돌려 `UNSKEIN_API`·watch 대상이 `[OK]` 로, `UNSKEIN_MORI_TOKEN` 이 `설정됨` 으로 바뀌고 마지막 줄이 `[건너뜀]` 대신 `[OK] 가용 watch 대상:` 으로 나오는지 확인합니다. 이어서 `/unskein:run bis "<비즈니스>" prj "<프로젝트>"` 한 바퀴를 돌려 `[preflight] 작업 전 준비 점검:` 이 실제로 찍히고 claim 까지 가는지 봅니다.
+
 ## 3. 재검증
 
 복구 후 같은 단계에서 다시 확인해 증상이 사라졌는지 봅니다:
@@ -267,6 +321,7 @@ TESTER 갈래입니다. 검증 결과 상세에 "첨부 없음" 만 뜨거나, �
 - 2·3·6번: `/unskein:run` 한 바퀴를 실제로 돌려 claim·clone·push·회수까지 진행되는지 확인합니다.
 - 8번: 윈도우에서 `start.ps1` 의 `READY` 출력과 `remote.js tabs` 응답으로 CDP Chrome 연결이 되는지 확인합니다(병렬 세션은 그 포트로 — `start.ps1 -Port <n>` + `remote.js tabs --port=<n>`).
 - 9번: 충돌을 정리한 뒤 `/unskein:run` 한 바퀴가 규약(`RESULT:`/`QUESTION:`)대로 회수되는지 확인합니다.
+- 13번: 명시 `source` 한 **새 셸**에서 `/unskein:status` 의 `UNSKEIN_API`·토큰·watch 세 줄이 채워지는지 보고, 이어 `/unskein:run` 한 바퀴가 `[preflight] 작업 전 준비 점검:` 을 실제로 찍고 claim 까지 가는지 확인합니다.
 - 11·12번: 각 갈래 끝의 재검증 절차대로 — 케이스는 `push` 가 `upserted` 를 내고 웹 목록에 보이는지, 증거는 업로드가 `ok:true` 로 끝나고 웹 검증 결과 상세에서 실제로 열리는지. 둘 다 **다음 검증 한 바퀴에서 카드의 미실행 표기가 사라지는 것**까지 봐야 닫힙니다(단발 성공은 env 가 새 창에 안 실린 경우를 못 가릅니다).
 
 증상이 사라지면 복구 완료를 알리고, 연속 처리는 `/unskein:watch` 로 안내합니다.
